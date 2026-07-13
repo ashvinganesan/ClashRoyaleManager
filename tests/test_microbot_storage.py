@@ -100,6 +100,43 @@ class MicrobotStorageTests(unittest.TestCase):
             self.assertIsNotNone(challenge)
             self.assertEqual(challenge["player_tag"], "#ABC123")
 
+    def test_direct_verification_links_account_and_approves_matching_challenge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            store.create_challenge(
+                discord_id=2,
+                discord_name="Tester",
+                player_tag="#ABC123",
+                player_name="Player",
+                challenge_code="CR-TEST12",
+                ttl_minutes=-1,
+            )
+
+            store.approve_direct_verification(
+                reviewer_discord_id=1,
+                discord_id=2,
+                discord_name="Tester",
+                player_tag="#ABC123",
+                player_name="Player",
+                clan_tag="#CLAN",
+                clan_name="Clan",
+            )
+
+            link = store.get_link_by_discord_id(2)
+
+            with store.connect() as connection:
+                challenge = connection.execute(
+                    "SELECT status, reviewed_by_discord_id FROM verification_challenges WHERE discord_id = ?",
+                    (2,),
+                ).fetchone()
+
+            self.assertIsNotNone(link)
+            self.assertEqual(link["player_tag"], "#ABC123")
+            self.assertEqual(challenge["status"], "approved")
+            self.assertEqual(challenge["reviewed_by_discord_id"], 1)
+
     def test_member_presence_keeps_earliest_seen(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(str(Path(directory) / "microbot.sqlite3"))

@@ -1299,7 +1299,7 @@ def build_bot() -> MicroBot:
             name="Leader Action",
             value=(
                 f"After you see the code in clan chat, run `/confirm_verification member:{interaction.user.mention}`.\n"
-                f"Fallback with tag: `/confirm_verification member:{interaction.user.mention} player_tag:{player['tag']}`"
+                f"Fallback/direct verify with tag: `/confirm_verification member:{interaction.user.mention} player_tag:{player['tag']}`"
             ),
             inline=False,
         )
@@ -1719,30 +1719,73 @@ def build_bot() -> MicroBot:
         )
 
         if challenge is None:
-            await interaction.followup.send("No active verification challenge found.", ephemeral=True)
-            return
+            if not normalized_tag:
+                await interaction.followup.send(
+                    "No active verification challenge found. "
+                    "If you are using an expired leader-channel request, rerun with the player tag.",
+                    ephemeral=True,
+                )
+                return
+
+            player_tag_to_verify = normalized_tag
+            direct_verification = True
+        else:
+            player_tag_to_verify = challenge["player_tag"]
+            direct_verification = False
 
         try:
-            player = await asyncio.to_thread(clash.get_player, challenge["player_tag"])
+            player = await asyncio.to_thread(clash.get_player, player_tag_to_verify)
+        except ClashNotFound:
+            await interaction.followup.send("That player tag does not exist.", ephemeral=True)
+            return
         except ClashApiError:
             await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
 
         clan_tag, clan_name = player_clan(player)
-        store.approve_challenge(
-            challenge["id"],
-            interaction.user.id,
-            member.id,
-            discord_name(member),
-            player["tag"],
-            player["name"],
-            clan_tag,
-            clan_name,
-        )
+
+        if settings.clan_tag and clan_tag != settings.clan_tag:
+            await interaction.followup.send("That player is not currently in the configured clan.", ephemeral=True)
+            return
+
+        existing_player_link = store.get_link_by_player_tag(player["tag"])
+
+        if existing_player_link and existing_player_link["discord_id"] != member.id:
+            await interaction.followup.send(
+                f"That player tag is already linked to <@{existing_player_link['discord_id']}>.",
+                ephemeral=True,
+            )
+            return
+
+        if direct_verification:
+            store.approve_direct_verification(
+                interaction.user.id,
+                member.id,
+                discord_name(member),
+                player["tag"],
+                player["name"],
+                clan_tag,
+                clan_name,
+            )
+        else:
+            store.approve_challenge(
+                challenge["id"],
+                interaction.user.id,
+                member.id,
+                discord_name(member),
+                player["tag"],
+                player["name"],
+                clan_tag,
+                clan_name,
+            )
+
         role_note = await add_verified_role(interaction, member)
         nickname_note = await set_member_nickname(member, player["name"])
 
         message = f"Verified {member.mention} as {player['name']} `{player['tag']}`."
+
+        if direct_verification:
+            message += "\nUsed admin direct verification because no active challenge was found."
 
         if role_note:
             message += f"\n{role_note}"

@@ -354,3 +354,46 @@ class Store:
                 """,
                 (reviewer_discord_id, now, challenge_id),
             )
+
+    def approve_direct_verification(self,
+                                    reviewer_discord_id: int,
+                                    discord_id: int,
+                                    discord_name: str,
+                                    player_tag: str,
+                                    player_name: str,
+                                    clan_tag: Optional[str],
+                                    clan_name: Optional[str]):
+        """Link a Discord account to a player directly by admin action."""
+        now = iso(utc_now())
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO linked_accounts (
+                    discord_id, discord_name, player_tag, player_name,
+                    clan_tag, clan_name, verified_at, verified_by_discord_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(discord_id) DO UPDATE SET
+                    discord_name = excluded.discord_name,
+                    player_tag = excluded.player_tag,
+                    player_name = excluded.player_name,
+                    clan_tag = excluded.clan_tag,
+                    clan_name = excluded.clan_name,
+                    verified_at = excluded.verified_at,
+                    verified_by_discord_id = excluded.verified_by_discord_id
+                """,
+                (discord_id, discord_name, player_tag, player_name, clan_tag, clan_name, now, reviewer_discord_id),
+            )
+            connection.execute(
+                """
+                UPDATE verification_challenges
+                SET status = 'approved',
+                    reviewed_by_discord_id = ?,
+                    reviewed_at = ?
+                WHERE discord_id = ?
+                    AND player_tag = ?
+                    AND status IN ('pending', 'expired')
+                """,
+                (reviewer_discord_id, now, discord_id, player_tag),
+            )
