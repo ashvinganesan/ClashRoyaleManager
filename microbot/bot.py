@@ -21,6 +21,7 @@ LOG = logging.getLogger("microbot")
 DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
 DEFAULT_KICK_THRESHOLD = 2000
 DEFAULT_PROMOTION_THRESHOLD = 2500
+CONFIRM_VERIFICATION_ROLE_NAMES = {"elder"}
 MIN_LEADERBOARD_WARS = 2
 MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
@@ -166,6 +167,30 @@ def normalized_role(member: dict) -> str:
 def role_label(member: dict) -> str:
     """Return a compact, colored role marker for Discord war rows."""
     return ROLE_MARKERS.get(normalized_role(member), f"⬜ {format_name(member.get('role') or 'Unknown')}")
+
+
+def has_named_role(user: Any, role_names: set[str]) -> bool:
+    """Return whether a Discord user/member has one of the named roles."""
+    for role in getattr(user, "roles", []) or []:
+        if str(getattr(role, "name", "")).casefold() in role_names:
+            return True
+
+    return False
+
+
+def can_confirm_verification_user(user: Any) -> bool:
+    """Return whether a Discord user/member can confirm verifications."""
+    permissions = getattr(user, "guild_permissions", None)
+
+    if getattr(permissions, "administrator", False):
+        return True
+
+    return has_named_role(user, CONFIRM_VERIFICATION_ROLE_NAMES)
+
+
+def can_confirm_verification(interaction: discord.Interaction) -> bool:
+    """App command check for verification confirmation."""
+    return can_confirm_verification_user(interaction.user)
 
 
 def discord_id_from_mention(value: str) -> Optional[int]:
@@ -1298,7 +1323,7 @@ def build_bot() -> MicroBot:
         embed.add_field(
             name="Leader Action",
             value=(
-                f"After you see the code in clan chat, run `/confirm_verification member:{interaction.user.mention}`.\n"
+                f"After an admin or Elder sees the code in clan chat, run `/confirm_verification member:{interaction.user.mention}`.\n"
                 f"Fallback/direct verify with tag: `/confirm_verification member:{interaction.user.mention} player_tag:{player['tag']}`"
             ),
             inline=False,
@@ -1704,7 +1729,7 @@ def build_bot() -> MicroBot:
         await interaction.response.send_message(message, ephemeral=True)
 
     @bot.tree.command(name="confirm_verification", description="Leader confirmation after seeing a code in clan chat.")
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.check(can_confirm_verification)
     @app_commands.describe(member="Discord member who posted the code")
     @app_commands.describe(player_tag="Optional player tag if the member has more than one pending request")
     async def confirm_verification(interaction: discord.Interaction,
@@ -1798,7 +1823,7 @@ def build_bot() -> MicroBot:
     @confirm_verification.error
     async def confirm_verification_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
-            await send_ephemeral(interaction, "Only server admins can confirm verifications.")
+            await send_ephemeral(interaction, "Only server admins or members with the Elder role can confirm verifications.")
         else:
             LOG.exception("Unexpected command error", exc_info=error)
             await send_ephemeral(interaction, "Unexpected error.")

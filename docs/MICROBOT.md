@@ -14,7 +14,7 @@ It is intentionally separate from the full historical manager while deployment i
 ## Commands
 
 - `/verify <player_tag>` creates a short code for the member to post in Clash Royale clan chat.
-- `/confirm_verification <member> [player_tag]` lets a Discord admin approve the link after seeing the code. If the active challenge expired, including `player_tag` direct-verifies the member after checking the player is still in the clan.
+- `/confirm_verification <member> [player_tag]` lets a Discord admin or member with the `Elder` role approve the link after seeing the code. If the active challenge expired, including `player_tag` direct-verifies the member after checking the player is still in the clan.
 - `/remove_verification <member>` lets a Discord admin remove a member's linked account and verified role.
 - `/set_verified_role <role>` sets the role assigned after successful verification.
 - `/set_verification_channel <channel>` sets the leader-only channel where pending verification requests are posted.
@@ -38,7 +38,7 @@ It is intentionally separate from the full historical manager while deployment i
 6. Leave one member verification channel visible to `@everyone`.
 7. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
 
-Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
+Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
 
 The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. If the request expires before a leader handles it, the fallback command with `player_tag` in the leader message can still direct-verify that member. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
 

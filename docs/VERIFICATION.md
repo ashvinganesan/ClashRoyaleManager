@@ -8,7 +8,7 @@ The first safe verification workflow is human-assisted:
 2. The bot checks that the player tag exists and is currently in a tracked clan.
 3. The bot creates a short verification code such as `CR-A1B2C3`.
 4. The member posts that exact code in Clash Royale clan chat.
-5. A leader who can see clan chat runs `/confirm_verification <member> <player_tag>`.
+5. A leader with Discord administrator permission or the `Elder` role who can see clan chat runs `/confirm_verification <member> <player_tag>`.
 6. The bot links the Discord account to the Clash Royale player, updates roles/nickname, and posts the new-member info embed.
 
 If the active challenge expires before a leader handles it, the leader can still run the fallback command from the leader-channel message:
