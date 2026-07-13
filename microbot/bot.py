@@ -400,20 +400,14 @@ def build_bot() -> MicroBot:
     @bot.tree.command(name="remove_verification", description="Remove a member's linked Clash Royale verification.")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(member="Discord member whose verification should be removed")
-    async def remove_verification(interaction: discord.Interaction, member: Optional[discord.Member] = None):
-        target = member or interaction.user
-
-        if not isinstance(target, discord.Member):
-            await interaction.response.send_message("Choose a server member.", ephemeral=True)
-            return
-
-        link = store.remove_link_by_discord_id(target.id)
-        role_note = await remove_verified_role(interaction, target)
+    async def remove_verification(interaction: discord.Interaction, member: discord.Member):
+        link = store.remove_link_by_discord_id(member.id)
+        role_note = await remove_verified_role(interaction, member)
 
         if link is None:
-            message = f"No linked Clash Royale account was found for {target.mention}."
+            message = f"No linked Clash Royale account was found for {member.mention}."
         else:
-            message = f"Removed verification for {target.mention}: {link['player_name']} `{link['player_tag']}`."
+            message = f"Removed verification for {member.mention}: {link['player_name']} `{link['player_tag']}`."
 
         if role_note:
             message += f"\n{role_note}"
