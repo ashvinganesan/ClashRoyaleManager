@@ -19,7 +19,9 @@ It is intentionally separate from the full historical manager while deployment i
 - `/set_verified_role <role>` sets the role assigned after successful verification.
 - `/set_verification_channel <channel>` sets the leader-only channel where pending verification requests are posted.
 - `/verification_config` shows the current verification role and review channel settings.
-- `/war_stats` posts the current Clan War/River Race snapshot for the configured clan.
+- `/set_kick_threshold <min_fame>` sets the war fame threshold used for kick suggestions.
+- `/war_config` shows the current war stat settings.
+- `/war_stats` posts current Clan War stats, rolling completed-war averages, first-seen dates, and suggested kicks.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
 
@@ -33,9 +35,21 @@ It is intentionally separate from the full historical manager while deployment i
 6. Leave one member verification channel visible to `@everyone`.
 7. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
 
-Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, and `/verification_config`.
+Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_kick_threshold`, `/war_config`, and `/verification_config`.
 
 The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
+
+## War Stats
+
+`/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history.
+
+The default kick suggestion threshold is `2000` war fame. Leaders can change it with:
+
+```text
+/set_kick_threshold 2000
+```
+
+Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running.
 
 ## Run
 

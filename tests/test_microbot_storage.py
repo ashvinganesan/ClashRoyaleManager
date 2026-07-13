@@ -1,3 +1,4 @@
+import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,17 @@ class MicrobotStorageTests(unittest.TestCase):
             store.set_verification_channel_id(987654321)
 
             self.assertEqual(store.get_verification_channel_id(), 987654321)
+
+    def test_kick_threshold_setting_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            self.assertIsNone(store.get_kick_threshold())
+
+            store.set_kick_threshold(2000)
+
+            self.assertEqual(store.get_kick_threshold(), 2000)
 
     def test_invalid_verified_role_setting_returns_none(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -76,6 +88,22 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertIsNotNone(challenge)
             self.assertEqual(challenge["player_tag"], "#ABC123")
+
+    def test_member_presence_keeps_earliest_seen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+            newer = dt.datetime(2026, 7, 13, tzinfo=dt.timezone.utc)
+            older = dt.datetime(2026, 6, 29, tzinfo=dt.timezone.utc)
+
+            store.upsert_member_presence("#ABC123", "Player", "#CLAN", newer, "current roster")
+            store.upsert_member_presence("#ABC123", "Player", "#CLAN", older, "river race log")
+
+            presence = store.get_member_presence_map()["#ABC123"]
+
+            self.assertEqual(presence["first_seen_at"], older.isoformat())
+            self.assertEqual(presence["first_seen_source"], "river race log")
+            self.assertEqual(presence["last_seen_at"], newer.isoformat())
 
 
 if __name__ == "__main__":

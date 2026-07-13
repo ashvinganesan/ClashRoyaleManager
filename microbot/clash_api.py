@@ -68,3 +68,10 @@ class ClashClient:
         normalized_tag = normalize_tag(tag)
         encoded_tag = urllib.parse.quote(normalized_tag, safe="")
         return self._get(f"/clans/{encoded_tag}/currentriverrace")
+
+    def get_river_race_log(self, tag: str, limit: int = 10) -> Dict[str, Any]:
+        """Fetch recent completed river races for a clan."""
+        normalized_tag = normalize_tag(tag)
+        encoded_tag = urllib.parse.quote(normalized_tag, safe="")
+        query = urllib.parse.urlencode({"limit": limit})
+        return self._get(f"/clans/{encoded_tag}/riverracelog?{query}")

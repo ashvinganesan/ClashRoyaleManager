@@ -72,6 +72,15 @@ class Store:
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS clan_member_presence (
+                    player_tag TEXT PRIMARY KEY,
+                    player_name TEXT NOT NULL,
+                    clan_tag TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    first_seen_source TEXT NOT NULL
+                );
                 """
             )
 
@@ -129,6 +138,71 @@ class Store:
             return int(value)
         except ValueError:
             return None
+
+    def set_kick_threshold(self, min_fame: int):
+        """Persist the minimum war fame used for kick suggestions."""
+        self.set_setting("kick_threshold", str(min_fame))
+
+    def get_kick_threshold(self) -> Optional[int]:
+        """Return the configured minimum war fame used for kick suggestions."""
+        value = self.get_setting("kick_threshold")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def upsert_member_presence(self,
+                               player_tag: str,
+                               player_name: str,
+                               clan_tag: Optional[str],
+                               seen_at: dt.datetime,
+                               source: str):
+        """Record that a player was seen in the clan or clan war history."""
+        seen_value = iso(seen_at)
+
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT first_seen_at FROM clan_member_presence WHERE player_tag = ?",
+                (player_tag,),
+            ).fetchone()
+
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO clan_member_presence (
+                        player_tag, player_name, clan_tag, first_seen_at, last_seen_at, first_seen_source
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (player_tag, player_name, clan_tag, seen_value, seen_value, source),
+                )
+                return
+
+            first_seen_at = min(row["first_seen_at"], seen_value)
+            first_seen_source = source if first_seen_at == seen_value else None
+            connection.execute(
+                """
+                UPDATE clan_member_presence
+                SET player_name = ?,
+                    clan_tag = ?,
+                    first_seen_at = ?,
+                    last_seen_at = MAX(last_seen_at, ?),
+                    first_seen_source = COALESCE(?, first_seen_source)
+                WHERE player_tag = ?
+                """,
+                (player_name, clan_tag, first_seen_at, seen_value, first_seen_source, player_tag),
+            )
+
+    def get_member_presence_map(self) -> dict[str, sqlite3.Row]:
+        """Return stored clan member presence keyed by player tag."""
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM clan_member_presence").fetchall()
+
+        return {row["player_tag"]: row for row in rows}
 
     def create_challenge(self,
                          discord_id: int,

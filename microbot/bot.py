@@ -17,6 +17,9 @@ from microbot.storage import Store
 
 LOG = logging.getLogger("microbot")
 DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
+DEFAULT_KICK_THRESHOLD = 2000
+RIVER_RACE_LOG_LIMIT = 10
+ROLLING_WAR_DAYS = 35
 
 
 def discord_name(user: Any) -> str:
@@ -56,6 +59,68 @@ def clip_text(value: str, limit: int = 1024) -> str:
 def format_name(value: Any) -> str:
     """Escape player/clan names for Discord embeds."""
     return discord.utils.escape_markdown(str(value or "Unknown"))
+
+
+def parse_clash_time(value: Optional[str]) -> Optional[dt.datetime]:
+    """Parse Clash Royale API timestamps."""
+    if not value:
+        return None
+
+    for time_format in ("%Y%m%dT%H%M%S.%fZ", "%Y%m%dT%H%M%SZ"):
+        try:
+            return dt.datetime.strptime(value, time_format).replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            continue
+
+    return None
+
+
+def parse_iso_datetime(value: Optional[str]) -> Optional[dt.datetime]:
+    """Parse an ISO timestamp from SQLite."""
+    if not value:
+        return None
+
+    try:
+        return dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def short_date(value: Optional[dt.datetime]) -> str:
+    """Format a short UTC date."""
+    if value is None:
+        return "unknown"
+
+    return value.astimezone(dt.timezone.utc).strftime("%b %-d")
+
+
+def days_ago_label(value: Optional[dt.datetime], now: dt.datetime) -> str:
+    """Return a compact age label."""
+    if value is None:
+        return "unknown"
+
+    days = max(0, (now.date() - value.astimezone(dt.timezone.utc).date()).days)
+
+    if days == 0:
+        return "today"
+
+    if days == 1:
+        return "1 day"
+
+    return f"{days} days"
+
+
+def race_clan_from_log_item(log_item: dict, clan_tag: Optional[str]) -> Optional[dict]:
+    """Return this clan's standing entry from a river race log item."""
+    standings = log_item.get("standings") or []
+
+    for standing in standings:
+        standing_clan = standing.get("clan") or {}
+
+        if not clan_tag or standing_clan.get("tag") == clan_tag:
+            return standing_clan
+
+    return None
 
 
 async def send_ephemeral(interaction: discord.Interaction, message: str):
@@ -177,6 +242,255 @@ def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
     return embed
 
 
+def collect_completed_war_stats(race_log: dict,
+                                clan_tag: Optional[str],
+                                cutoff: dt.datetime) -> tuple[dict[str, dict], list[dt.datetime]]:
+    """Collect rolling completed-war stats from the river race log."""
+    player_stats: dict[str, dict] = {}
+    race_dates = []
+
+    for log_item in race_log.get("items") or []:
+        completed_at = parse_clash_time(log_item.get("createdDate"))
+
+        if completed_at is None or completed_at < cutoff:
+            continue
+
+        standing_clan = race_clan_from_log_item(log_item, clan_tag)
+
+        if not standing_clan:
+            continue
+
+        race_dates.append(completed_at)
+
+        for participant in standing_clan.get("participants") or []:
+            player_tag = participant.get("tag")
+
+            if not player_tag:
+                continue
+
+            entry = player_stats.setdefault(
+                player_tag,
+                {"name": participant.get("name", "Unknown"), "scores": []},
+            )
+            entry["name"] = participant.get("name", entry["name"])
+            entry["scores"].append(int_value(participant.get("fame")))
+
+    return player_stats, race_dates
+
+
+def estimate_current_race_start(race: dict, race_log: dict, now: dt.datetime) -> dt.datetime:
+    """Estimate current race start because the API does not expose member join dates."""
+    completed_dates = [
+        parsed
+        for parsed in (parse_clash_time(item.get("createdDate")) for item in race_log.get("items") or [])
+        if parsed is not None
+    ]
+
+    if completed_dates:
+        return max(completed_dates)
+
+    period_index = int_value(race.get("periodIndex"))
+    current_week_day = period_index % 7
+    return now - dt.timedelta(days=current_week_day)
+
+
+def record_war_presence(store: Store,
+                        clan_tag: Optional[str],
+                        race: dict,
+                        members_payload: dict,
+                        race_log: dict,
+                        now: dt.datetime):
+    """Record current and historical member sightings."""
+    for member in members_payload.get("items") or []:
+        if member.get("tag"):
+            store.upsert_member_presence(
+                member["tag"],
+                member.get("name", "Unknown"),
+                clan_tag,
+                now,
+                "current roster",
+            )
+
+    current_clan = race.get("clan") or {}
+
+    for participant in current_clan.get("participants") or []:
+        if participant.get("tag"):
+            store.upsert_member_presence(
+                participant["tag"],
+                participant.get("name", "Unknown"),
+                clan_tag,
+                now,
+                "current river race",
+            )
+
+    for log_item in race_log.get("items") or []:
+        completed_at = parse_clash_time(log_item.get("createdDate"))
+
+        if completed_at is None:
+            continue
+
+        standing_clan = race_clan_from_log_item(log_item, clan_tag)
+
+        if not standing_clan:
+            continue
+
+        for participant in standing_clan.get("participants") or []:
+            if participant.get("tag"):
+                store.upsert_member_presence(
+                    participant["tag"],
+                    participant.get("name", "Unknown"),
+                    clan_tag,
+                    completed_at,
+                    "river race log",
+                )
+
+
+def score_line(name: str,
+               current_fame: int,
+               average_fame: Optional[float],
+               race_count: int,
+               first_seen_at: Optional[dt.datetime],
+               now: dt.datetime,
+               reason: str) -> str:
+    """Format a compact member war score line."""
+    average_text = f"{average_fame:,.0f}" if average_fame is not None else "n/a"
+    return (
+        f"{format_name(name)} - {current_fame:,} current, "
+        f"{average_text} avg/{race_count} wars, "
+        f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}): {reason}"
+    )
+
+
+def build_enhanced_war_stats_embed(race: dict,
+                                   members_payload: dict,
+                                   race_log: dict,
+                                   presence_map: dict,
+                                   kick_threshold: int) -> discord.Embed:
+    """Build current, rolling, and kick-review war stats."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=ROLLING_WAR_DAYS)
+    current_clan = race.get("clan") or {}
+    members = members_payload.get("items") or []
+    current_participants = current_clan.get("participants") or []
+    current_by_tag = {participant.get("tag"): participant for participant in current_participants}
+    historical_stats, completed_race_dates = collect_completed_war_stats(race_log, current_clan.get("tag"), cutoff)
+    race_start = estimate_current_race_start(race, race_log, now)
+
+    current_fame_total = sum(int_value(participant.get("fame")) for participant in current_participants)
+    decks_today = sum(int_value(participant.get("decksUsedToday")) for participant in current_participants)
+    decks_total = sum(int_value(participant.get("decksUsed")) for participant in current_participants)
+    period_index = int_value(race.get("periodIndex"))
+    current_week_day = (period_index % 7) + 1
+
+    embed = discord.Embed(
+        title=f"{current_clan.get('name', 'Clan')} War Stats",
+        description=f"Current race plus completed wars since {short_date(cutoff)}.",
+        color=discord.Color.blue(),
+        timestamp=now,
+    )
+    embed.add_field(
+        name="Current War",
+        value=(
+            f"Fame: **{current_fame_total:,}**\n"
+            f"Decks today: **{decks_today}/200**\n"
+            f"Decks total: **{decks_total}**\n"
+            f"War day estimate: **{current_week_day}/7**\n"
+            f"Kick review threshold: **{kick_threshold:,} war fame**"
+        ),
+        inline=False,
+    )
+
+    rolling_rows = []
+    suggested_rows = []
+    review_rows = []
+
+    for member in members:
+        player_tag = member.get("tag")
+
+        if not player_tag:
+            continue
+
+        player_name = member.get("name", "Unknown")
+        participant = current_by_tag.get(player_tag, {})
+        current_fame = int_value(participant.get("fame"))
+        history = historical_stats.get(player_tag, {})
+        scores = history.get("scores", [])
+        race_count = len(scores)
+        average_fame = (sum(scores) / race_count) if race_count else None
+        presence = presence_map.get(player_tag)
+        first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
+        tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
+        tracked_from_race_start = first_seen_at is not None and first_seen_at <= race_start + dt.timedelta(hours=6)
+        low_current = current_fame < kick_threshold
+        low_average = average_fame is not None and race_count >= 2 and average_fame < kick_threshold
+        good_average = average_fame is not None and race_count >= 2 and average_fame >= kick_threshold
+
+        if average_fame is not None:
+            rolling_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
+
+        if current_fame == 0 and tracked_after_race_start:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "newly tracked + 0 current fame")
+            )
+        elif low_average:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "rolling average below threshold")
+            )
+        elif low_current and tracked_from_race_start and not good_average:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "below threshold and tracked from war start")
+            )
+        elif low_current and tracked_after_race_start and current_fame > 0:
+            review_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but tracked after war start")
+            )
+        elif low_current and good_average:
+            review_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but good rolling average")
+            )
+
+    rolling_rows.sort(key=lambda row: (row[0], row[1], row[2].lower()), reverse=True)
+    rolling_lines = [
+        (
+            f"{index}. {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
+            f"{current_fame:,} current, seen {short_date(first_seen)}"
+        )
+        for index, (average, race_count, name, current_fame, first_seen) in enumerate(rolling_rows[:10], 1)
+    ]
+    embed.add_field(
+        name=f"Rolling {ROLLING_WAR_DAYS}-Day Leaders",
+        value=clip_text("\n".join(rolling_lines) or "No completed war history in the API window yet."),
+        inline=False,
+    )
+
+    if len(suggested_rows) > 10:
+        suggested_rows = suggested_rows[:10] + [f"...and {len(suggested_rows) - 10} more"]
+
+    embed.add_field(
+        name="Suggested Kicks",
+        value=clip_text("\n".join(suggested_rows) or "No kick suggestions at the current threshold."),
+        inline=False,
+    )
+
+    if len(review_rows) > 8:
+        review_rows = review_rows[:8] + [f"...and {len(review_rows) - 8} more"]
+
+    embed.add_field(
+        name="Review / Likely Excuse",
+        value=clip_text("\n".join(review_rows) or "No low-score exceptions detected."),
+        inline=False,
+    )
+
+    completed_count = len(completed_race_dates)
+    embed.set_footer(
+        text=(
+            f"{completed_count} completed wars in window. "
+            "First seen is tracked by bot/API observations; Clash API does not expose true join date."
+        )
+    )
+    return embed
+
+
 class MicroBot(discord.Client):
     """Minimal Discord client with slash commands."""
 
@@ -218,6 +532,10 @@ def build_bot() -> MicroBot:
     def current_verification_channel_id() -> Optional[int]:
         """Return the configured verification review channel."""
         return store.get_verification_channel_id()
+
+    def current_kick_threshold() -> int:
+        """Return the configured minimum war fame for kick suggestions."""
+        return store.get_kick_threshold() or DEFAULT_KICK_THRESHOLD
 
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
@@ -437,6 +755,32 @@ def build_bot() -> MicroBot:
 
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
+    @bot.tree.command(name="set_kick_threshold", description="Set minimum war fame for kick suggestions.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(min_fame="Minimum current or rolling war fame expected from members")
+    async def set_kick_threshold(interaction: discord.Interaction, min_fame: int):
+        if min_fame < 0:
+            await interaction.response.send_message("Kick threshold must be 0 or higher.", ephemeral=True)
+            return
+
+        store.set_kick_threshold(min_fame)
+        await interaction.response.send_message(
+            f"Kick suggestion threshold set to `{min_fame:,}` war fame.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(name="war_config", description="Show Clan War stat settings.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def war_config(interaction: discord.Interaction):
+        await interaction.response.send_message(
+            (
+                f"Kick suggestion threshold: `{current_kick_threshold():,}` war fame\n"
+                f"Rolling window: `{ROLLING_WAR_DAYS}` days\n"
+                "Join date note: Clash Royale does not expose true join date; this bot shows first seen."
+            ),
+            ephemeral=True,
+        )
+
     @bot.tree.command(name="me", description="Show your linked Clash Royale account.")
     async def me(interaction: discord.Interaction):
         link = store.get_link_by_discord_id(interaction.user.id)
@@ -519,9 +863,10 @@ def build_bot() -> MicroBot:
         await interaction.response.defer(thinking=True)
 
         try:
-            race, members = await asyncio.gather(
+            race, members, race_log = await asyncio.gather(
                 asyncio.to_thread(clash.get_current_river_race, settings.clan_tag),
                 asyncio.to_thread(clash.get_clan_members, settings.clan_tag),
+                asyncio.to_thread(clash.get_river_race_log, settings.clan_tag, RIVER_RACE_LOG_LIMIT),
             )
         except ClashNotFound:
             await interaction.followup.send("The configured clan tag was not found.", ephemeral=True)
@@ -530,7 +875,17 @@ def build_bot() -> MicroBot:
             await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
 
-        await interaction.followup.send(embed=build_war_stats_embed(race, members))
+        now = dt.datetime.now(dt.timezone.utc)
+        record_war_presence(store, settings.clan_tag, race, members, race_log, now)
+        presence_map = store.get_member_presence_map()
+        embed = build_enhanced_war_stats_embed(
+            race,
+            members,
+            race_log,
+            presence_map,
+            current_kick_threshold(),
+        )
+        await interaction.followup.send(embed=embed)
 
     @bot.tree.command(name="remove_verification", description="Remove a member's linked Clash Royale verification.")
     @app_commands.checks.has_permissions(administrator=True)
@@ -608,6 +963,8 @@ def build_bot() -> MicroBot:
 
     @set_verified_role.error
     @set_verification_channel.error
+    @set_kick_threshold.error
+    @war_config.error
     @verification_config.error
     @remove_verification.error
     async def verification_admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
