@@ -16,6 +16,7 @@ from microbot.storage import Store
 
 
 LOG = logging.getLogger("microbot")
+DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
 
 
 def discord_name(user: Any) -> str:
@@ -274,6 +275,17 @@ def build_bot() -> MicroBot:
         if member.nick == nickname:
             return None
 
+        if member.guild.owner_id == member.id:
+            return "Discord does not allow bots to update the server owner's nickname."
+
+        bot_member = member.guild.me
+
+        if bot_member and not bot_member.guild_permissions.manage_nicknames:
+            return "I could not update the nickname. I need Manage Nicknames."
+
+        if bot_member and member.top_role >= bot_member.top_role:
+            return "I could not update the nickname. My role must be above that member's highest role."
+
         try:
             await member.edit(nick=nickname, reason="Clash Royale clan verification")
         except discord.Forbidden:
@@ -289,11 +301,26 @@ def build_bot() -> MicroBot:
                                               expires_at: str) -> Optional[str]:
         """Post a pending verification request to the configured leader channel."""
         channel_id = current_verification_channel_id()
+        channel = None
+
+        if channel_id is None and interaction.guild:
+            channel = discord.utils.get(
+                interaction.guild.text_channels,
+                name=DEFAULT_VERIFICATION_CHANNEL_NAME,
+            )
+
+            if channel:
+                store.set_verification_channel_id(channel.id)
+                channel_id = channel.id
 
         if channel_id is None:
-            return "No leader verification channel is configured yet."
+            return (
+                "No leader verification channel is configured yet. "
+                f"Create `#{DEFAULT_VERIFICATION_CHANNEL_NAME}` or run `/set_verification_channel`."
+            )
 
-        channel = bot.get_channel(channel_id)
+        if channel is None:
+            channel = bot.get_channel(channel_id)
 
         if channel is None:
             try:

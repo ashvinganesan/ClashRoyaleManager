@@ -29,13 +29,13 @@ It is intentionally separate from the full historical manager while deployment i
 2. Move the bot's role above `Verified` in Server Settings > Roles.
 3. Make sure the bot has `Manage Roles` and `Manage Nicknames`.
 4. Run `/set_verified_role @Verified`.
-5. Create a leader-only verification review channel and run `/set_verification_channel #channel-name`.
+5. Create a leader-only `#verification-confirmation` channel, or run `/set_verification_channel #channel-name` for a different channel.
 6. Leave one member verification channel visible to `@everyone`.
 7. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
 
 Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, and `/verification_config`.
 
-The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN.
+The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
 
 ## Run
 
