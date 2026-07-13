@@ -43,7 +43,7 @@ The official Clash Royale API does not expose clan chat messages, so the microbo
 
 ## War Stats
 
-`/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history.
+`/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history. During training days, the active score switches to the last completed war so the post-war reset does not make everyone look like they scored 0.
 
 `/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `/show_stats member:@someone` for a verified Discord member, or `/show_stats` for your own verified account.
 
@@ -56,11 +56,11 @@ Leaders can change them with:
 /set_promotion_threshold 2500
 ```
 
-Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars, 14 days first-seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
+Leaderboard eligibility requires at least 2 full completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 full completed wars, 14 days first-seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
 
-Suggested kick/demotion candidates must be below the current-war threshold and also have either no completed-war average yet or a rolling average below the kick threshold. Members above the current-war threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. First-seen is shown as context for leaders, not as an automatic excuse.
+Suggested kick/demotion candidates must be below the active score threshold and also have either no full completed-war average yet or a rolling average below the kick threshold. The active score is current-war fame during battle periods and last-war fame during training periods. Members above the active score threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. First-seen is shown as context for leaders, not as an automatic excuse.
 
-Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running.
+Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted.
 
 ## Run
 

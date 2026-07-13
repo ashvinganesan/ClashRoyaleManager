@@ -28,6 +28,7 @@ RIVER_RACE_LOG_LIMIT = 10
 ROLLING_WAR_DAYS = 35
 DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
+FULL_WAR_JOIN_CUTOFF_BEFORE_END = dt.timedelta(days=4)
 ROLE_MARKERS = {
     "member": "🟫 Member",
     "elder": "🟩 Elder",
@@ -233,13 +234,14 @@ def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
 
     period_type = race.get("periodType", "unknown")
     period_index = int_value(race.get("periodIndex")) + 1
+    decks_label = "training decks used" if is_training_period(race) else "decks used"
     embed.add_field(
         name="Summary",
         value=(
             f"Fame: **{fame:,}**\n"
-            f"Decks today: **{decks_today}/200**\n"
+            f"Decks today: **{decks_today}/200 {decks_label}**\n"
             f"Current roster remaining: **{remaining_roster_decks}/{roster_capacity}**\n"
-            f"Decks total this race: **{decks_total}**\n"
+            f"Decks total this race: **{decks_total} {decks_label}**\n"
             f"Members with 0 decks today: **{no_decks_today}**\n"
             f"Period: **{format_name(period_type)} {period_index}**"
         ),
@@ -261,7 +263,7 @@ def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
         top_lines.append(
             f"{index}. {format_name(participant.get('name'))} - "
             f"{int_value(participant.get('fame')):,} fame, "
-            f"{int_value(participant.get('decksUsedToday'))}/4 today"
+            f"{int_value(participant.get('decksUsedToday'))}/4 {decks_label} today"
         )
 
     embed.add_field(
@@ -272,7 +274,7 @@ def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
 
     needs_decks.sort(key=lambda item: (item[0], str(item[1]).lower()))
     needs_decks_lines = [
-        f"{format_name(name)} - {used}/4"
+        f"{format_name(name)} - {used}/4 {decks_label}"
         for used, name, _ in needs_decks[:12]
     ]
 
@@ -293,7 +295,7 @@ def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
         clan_decks_today = sum(int_value(participant.get("decksUsedToday")) for participant in clan_participants)
         standings_lines.append(
             f"{index}. {format_name(race_clan.get('name'))} - "
-            f"{int_value(race_clan.get('fame')):,} fame, {clan_decks_today} decks today"
+            f"{int_value(race_clan.get('fame')):,} fame, {clan_decks_today} {decks_label} today"
         )
 
     embed.add_field(
@@ -341,6 +343,63 @@ def collect_completed_war_stats(race_log: dict,
             entry["entries"].append({"date": completed_at, "fame": fame})
 
     return player_stats, race_dates
+
+
+def is_training_period(race: dict) -> bool:
+    """Return whether the current river race period is training days."""
+    return str(race.get("periodType") or "").lower() == "training"
+
+
+def is_full_completed_war(completed_at: dt.datetime, first_seen_at: Optional[dt.datetime]) -> bool:
+    """Return whether a completed war should count for a member's average."""
+    if first_seen_at is None:
+        return True
+
+    # Clash exposes race log completion times, not join timestamps or battle-day
+    # boundaries. War battles end near the log timestamp; battle day 1 starts
+    # roughly four days earlier, so members seen by then had battle day 1
+    # available.
+    return first_seen_at <= completed_at - FULL_WAR_JOIN_CUTOFF_BEFORE_END
+
+
+def eligible_completed_entries(history: dict, first_seen_at: Optional[dt.datetime]) -> list[dict]:
+    """Return completed war entries that should count for the member."""
+    return [
+        entry
+        for entry in history.get("entries", [])
+        if is_full_completed_war(entry["date"], first_seen_at)
+    ]
+
+
+def average_entry_fame(entries: list[dict]) -> Optional[float]:
+    """Return average fame for completed war entries."""
+    return (sum(entry["fame"] for entry in entries) / len(entries)) if entries else None
+
+
+def completed_war_score(history: dict, completed_at: Optional[dt.datetime]) -> int:
+    """Return a player's score from a specific completed war."""
+    if completed_at is None:
+        return 0
+
+    for entry in history.get("entries", []):
+        if entry["date"] == completed_at:
+            return entry["fame"]
+
+    return 0
+
+
+def active_score(current_fame: int,
+                 history: dict,
+                 active_completed_at: Optional[dt.datetime],
+                 first_seen_at: Optional[dt.datetime]) -> tuple[Optional[int], str]:
+    """Return the score to use for current report recommendations."""
+    if active_completed_at is None:
+        return current_fame, "current"
+
+    if not is_full_completed_war(active_completed_at, first_seen_at):
+        return None, "last full war"
+
+    return completed_war_score(history, active_completed_at), "last war"
 
 
 def estimate_current_race_start(race: dict, race_log: dict, now: dt.datetime) -> dt.datetime:
@@ -423,19 +482,26 @@ def refresh_war_presence(store: Store,
 
 def score_line(role_text: str,
                name: str,
-               current_fame: int,
+               active_fame: Optional[int],
+               active_label: str,
                average_fame: Optional[float],
                race_count: int,
                first_seen_at: Optional[dt.datetime],
                now: dt.datetime,
                reason: str) -> str:
     """Format a compact member war score line."""
+    active_text = f"{active_fame:,}" if active_fame is not None else "n/a"
     average_text = f"{average_fame:,.0f}" if average_fame is not None else "n/a"
     return (
-        f"{role_text} {format_name(name)} - {current_fame:,} current, "
-        f"{average_text} avg/{race_count} wars, "
+        f"{role_text} {format_name(name)} - {active_text} {active_label}, "
+        f"{average_text} avg/{race_count} full wars, "
         f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}): {reason}"
     )
+
+
+def fame_text(value: Optional[int]) -> str:
+    """Format a fame value that can be unavailable."""
+    return f"{value:,}" if value is not None else "n/a"
 
 
 def add_line_fields(embed: discord.Embed,
@@ -576,6 +642,8 @@ def build_player_war_stats_embed(target: dict,
     }
     historical_stats, completed_race_dates = collect_completed_war_stats(race_log, current_clan.get("tag"), cutoff)
     race_start = estimate_current_race_start(race, race_log, now)
+    last_completed_at = max(completed_race_dates) if completed_race_dates else None
+    active_completed_at = last_completed_at if is_training_period(race) else None
 
     player_tag = target.get("tag")
     member = roster_by_tag.get(player_tag, target)
@@ -585,41 +653,48 @@ def build_player_war_stats_embed(target: dict,
     decks_today = min(4, int_value(participant.get("decksUsedToday")))
     decks_total = int_value(participant.get("decksUsed"))
     history = historical_stats.get(player_tag, {})
-    scores = history.get("scores", [])
-    entries = sorted(history.get("entries", []), key=lambda entry: entry["date"], reverse=True)
-    race_count = len(scores)
-    average_fame = (sum(scores) / race_count) if race_count else None
-    best_fame = max(scores) if scores else None
-    low_fame = min(scores) if scores else None
     presence = presence_map.get(player_tag)
     first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
     last_seen_at = parse_iso_datetime(presence["last_seen_at"]) if presence else None
+    full_entries = sorted(eligible_completed_entries(history, first_seen_at), key=lambda entry: entry["date"], reverse=True)
+    entries = sorted(history.get("entries", []), key=lambda entry: entry["date"], reverse=True)
+    race_count = len(full_entries)
+    average_fame = average_entry_fame(full_entries)
+    full_scores = [entry["fame"] for entry in full_entries]
+    best_fame = max(full_scores) if full_scores else None
+    low_fame = min(full_scores) if full_scores else None
+    active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at)
+    active_title = "Training Period / Last War" if active_completed_at is not None else "Current War"
+    fame_label = "Last war fame" if active_completed_at is not None else "Fame"
+    decks_label = "training decks used" if is_training_period(race) else "decks used"
     has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
     tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
-    low_current = current_fame < kick_threshold
+    low_active = active_fame is not None and active_fame < kick_threshold
     low_or_missing_average = average_fame is None or average_fame < kick_threshold
-    should_kick_demote = low_current and low_or_missing_average
+    should_kick_demote = low_active and low_or_missing_average
     should_promote = (
         average_fame is not None
         and average_fame >= promotion_threshold
         and race_count >= MIN_PROMOTION_WARS
         and has_leaderboard_tenure
-        and current_fame >= kick_threshold
+        and active_fame is not None
+        and active_fame >= kick_threshold
         and can_be_promoted(member)
     )
 
     embed = discord.Embed(
         title=f"{format_name(player_name)} War Stats",
         description=f"{role_label(member)} `{player_tag or 'unknown tag'}`",
-        color=discord.Color.green() if current_fame >= kick_threshold else discord.Color.gold(),
+        color=discord.Color.green() if active_fame is not None and active_fame >= kick_threshold else discord.Color.gold(),
         timestamp=now,
     )
     embed.add_field(
-        name="Current War",
+        name=active_title,
         value=(
-            f"Fame: **{current_fame:,}**\n"
-            f"Decks today: **{decks_today}/4**\n"
-            f"Decks total: **{decks_total}**"
+            f"{fame_label}: **{fame_text(active_fame)}**\n"
+            f"Decks today: **{decks_today}/4 {decks_label}**\n"
+            f"Decks total: **{decks_total} {decks_label}**\n"
+            f"Last completed war: **{short_date(last_completed_at)}**"
         ),
         inline=False,
     )
@@ -628,13 +703,17 @@ def build_player_war_stats_embed(target: dict,
     best_text = f"{best_fame:,}" if best_fame is not None else "n/a"
     low_text = f"{low_fame:,}" if low_fame is not None else "n/a"
     recent_lines = [
-        f"{short_date(entry['date'])}: {entry['fame']:,}"
+        (
+            f"{short_date(entry['date'])}: {entry['fame']:,}"
+            if is_full_completed_war(entry["date"], first_seen_at)
+            else f"{short_date(entry['date'])}: {entry['fame']:,} (partial; not counted)"
+        )
         for entry in entries[:5]
     ]
     embed.add_field(
-        name=f"Rolling {ROLLING_WAR_DAYS}-Day History",
+        name=f"Rolling {ROLLING_WAR_DAYS}-Day Full-War History",
         value=(
-            f"Average: **{average_text}** over **{race_count}** completed wars\n"
+            f"Average: **{average_text}** over **{race_count}** full completed wars\n"
             f"Best / Low: **{best_text}** / **{low_text}**\n"
             f"Recent: {', '.join(recent_lines) if recent_lines else 'No completed wars in window'}"
         ),
@@ -655,36 +734,40 @@ def build_player_war_stats_embed(target: dict,
 
     if should_kick_demote:
         if average_fame is not None:
-            kick_detail = "current and rolling average are below threshold"
+            kick_detail = f"{score_label} and rolling average are below threshold"
         elif tracked_after_race_start:
-            kick_detail = "current is below threshold; verify join timing"
+            kick_detail = f"{score_label} is below threshold; verify join timing"
         else:
-            kick_detail = "current is below threshold and no completed-war average exists"
-    elif current_fame >= kick_threshold:
-        kick_detail = "current war is at or above threshold"
+            kick_detail = f"{score_label} is below threshold and no full-war average exists"
+    elif active_fame is None:
+        kick_detail = "no full-war score is available yet"
+    elif active_fame >= kick_threshold:
+        kick_detail = f"{score_label} is at or above threshold"
     elif average_fame is not None and average_fame >= kick_threshold:
         kick_detail = "rolling average is at or above threshold"
     else:
         kick_detail = "not enough completed-war history"
 
     if should_promote:
-        promotion_detail = "meets average, tenure, current-war, and role requirements"
+        promotion_detail = "meets average, tenure, active-score, and role requirements"
     elif not can_be_promoted(member):
         promotion_detail = "already co-leader or leader"
     elif average_fame is None or average_fame < promotion_threshold:
         promotion_detail = "average is below promotion threshold"
     elif race_count < MIN_PROMOTION_WARS:
-        promotion_detail = f"requires {MIN_PROMOTION_WARS}+ completed wars"
+        promotion_detail = f"requires {MIN_PROMOTION_WARS}+ full completed wars"
     elif not has_leaderboard_tenure:
         promotion_detail = f"requires {MIN_LEADERBOARD_DAYS}+ days first-seen"
-    elif current_fame < kick_threshold:
-        promotion_detail = "current war is below kick threshold"
+    elif active_fame is None:
+        promotion_detail = "no full-war score is available yet"
+    elif active_fame < kick_threshold:
+        promotion_detail = f"{score_label} is below kick threshold"
     else:
         promotion_detail = "does not meet promotion rules"
 
     leaderboard_ok = average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure
     leaderboard_detail = (
-        f"requires {MIN_LEADERBOARD_WARS}+ completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen"
+        f"requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen"
         if not leaderboard_ok
         else "eligible for the rolling leaderboard"
     )
@@ -723,12 +806,24 @@ def build_enhanced_war_stats_embed(race: dict,
     current_by_tag = {participant.get("tag"): participant for participant in current_participants}
     historical_stats, completed_race_dates = collect_completed_war_stats(race_log, current_clan.get("tag"), cutoff)
     race_start = estimate_current_race_start(race, race_log, now)
+    last_completed_at = max(completed_race_dates) if completed_race_dates else None
+    active_completed_at = last_completed_at if is_training_period(race) else None
+    active_total_fame = (
+        sum(completed_war_score(history, active_completed_at) for history in historical_stats.values())
+        if active_completed_at is not None
+        else sum(int_value(participant.get("fame")) for participant in current_participants)
+    )
+    active_summary_label = "Last war fame" if active_completed_at is not None else "Fame"
+    active_row_label = "last war" if active_completed_at is not None else "current"
+    decks_today_label = "training decks used" if is_training_period(race) else "decks used"
+    decks_total_label = "training decks used" if is_training_period(race) else "decks used"
 
-    current_fame_total = sum(int_value(participant.get("fame")) for participant in current_participants)
     decks_today = sum(int_value(participant.get("decksUsedToday")) for participant in current_participants)
     decks_total = sum(int_value(participant.get("decksUsed")) for participant in current_participants)
     period_index = int_value(race.get("periodIndex"))
     current_week_day = (period_index % 7) + 1
+    period_type = format_name(race.get("periodType") or "unknown")
+    field_name = "Training Period" if active_completed_at is not None else "Current War"
 
     embed = discord.Embed(
         title=f"{current_clan.get('name', 'Clan')} War Stats",
@@ -737,12 +832,13 @@ def build_enhanced_war_stats_embed(race: dict,
         timestamp=now,
     )
     embed.add_field(
-        name="Current War",
+        name=field_name,
         value=(
-            f"Fame: **{current_fame_total:,}**\n"
-            f"Decks today: **{decks_today}/200**\n"
-            f"Decks total: **{decks_total}**\n"
-            f"War day estimate: **{current_week_day}/7**\n"
+            f"{active_summary_label}: **{active_total_fame:,}**\n"
+            f"Decks today: **{decks_today}/200 {decks_today_label}**\n"
+            f"Decks total: **{decks_total} {decks_total_label}**\n"
+            f"Period: **{period_type} day {current_week_day}/7**\n"
+            f"Last completed war: **{short_date(last_completed_at)}**\n"
             f"Kick threshold: **{kick_threshold:,} war fame**\n"
             f"Promotion threshold: **{promotion_threshold:,} avg war fame**"
         ),
@@ -764,52 +860,60 @@ def build_enhanced_war_stats_embed(race: dict,
         participant = current_by_tag.get(player_tag, {})
         current_fame = int_value(participant.get("fame"))
         history = historical_stats.get(player_tag, {})
-        scores = history.get("scores", [])
-        race_count = len(scores)
-        average_fame = (sum(scores) / race_count) if race_count else None
         presence = presence_map.get(player_tag)
         first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
+        full_entries = eligible_completed_entries(history, first_seen_at)
+        race_count = len(full_entries)
+        average_fame = average_entry_fame(full_entries)
+        active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at)
         has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
-        low_current = current_fame < kick_threshold
+        low_active = active_fame is not None and active_fame < kick_threshold
         low_or_missing_average = average_fame is None or average_fame < kick_threshold
 
         if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
-            rolling_rows.append((average_fame, race_count, member_role, player_name, current_fame, first_seen_at))
+            rolling_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
 
         if (average_fame is not None
                 and average_fame >= promotion_threshold
                 and race_count >= MIN_PROMOTION_WARS
                 and has_leaderboard_tenure
-                and current_fame >= kick_threshold
+                and active_fame is not None
+                and active_fame >= kick_threshold
                 and can_be_promoted(member)):
-            promotion_rows.append((average_fame, race_count, member_role, player_name, current_fame, first_seen_at))
+            promotion_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
 
-        if low_current and low_or_missing_average:
+        if low_active and low_or_missing_average:
             if average_fame is not None:
-                reason = "current and rolling average below threshold"
+                reason = f"{active_row_label} and rolling average below threshold"
             elif tracked_after_race_start:
-                reason = "current below threshold; verify join timing"
+                reason = f"{active_row_label} below threshold; verify join timing"
             else:
-                reason = "current below threshold; no completed-war average yet"
+                reason = f"{active_row_label} below threshold; no completed-war average yet"
 
             suggested_rows.append(
-                score_line(member_role, player_name, current_fame, average_fame, race_count, first_seen_at, now, reason)
+                (
+                    active_fame,
+                    average_fame if average_fame is not None else -1,
+                    race_count,
+                    player_name.lower(),
+                    score_line(member_role, player_name, active_fame, score_label, average_fame, race_count, first_seen_at, now, reason),
+                )
             )
 
     rolling_rows.sort(key=lambda row: (row[0], row[1], row[3].lower()), reverse=True)
     rolling_lines = [
         (
-            f"{index}. {role_text} {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
-            f"{current_fame:,} current, seen {short_date(first_seen)}"
+            f"{index}. {role_text} {format_name(name)} - {average:,.0f} avg/{race_count} full wars, "
+            f"{fame_text(active_fame)} {score_label}, seen {short_date(first_seen)}"
         )
-        for index, (average, race_count, role_text, name, current_fame, first_seen) in enumerate(rolling_rows[:10], 1)
+        for index, (average, race_count, role_text, name, active_fame, score_label, first_seen) in enumerate(rolling_rows[:10], 1)
     ]
     embed.add_field(
         name=f"Rolling {ROLLING_WAR_DAYS}-Day Leaders",
         value=clip_text(
             "\n".join(rolling_lines)
-            or f"No eligible members yet. Requires {MIN_LEADERBOARD_WARS}+ completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen."
+            or f"No eligible members yet. Requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen."
         ),
         inline=False,
     )
@@ -817,22 +921,24 @@ def build_enhanced_war_stats_embed(race: dict,
     promotion_rows.sort(key=lambda row: (row[0], row[1], row[3].lower()), reverse=True)
     promotion_lines = [
         (
-            f"{role_text} {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
-            f"{current_fame:,} current, seen {short_date(first_seen)}"
+            f"{role_text} {format_name(name)} - {average:,.0f} avg/{race_count} full wars, "
+            f"{fame_text(active_fame)} {score_label}, seen {short_date(first_seen)}"
         )
-        for average, race_count, role_text, name, current_fame, first_seen in promotion_rows
+        for average, race_count, role_text, name, active_fame, score_label, first_seen in promotion_rows
     ]
     add_line_fields(
         embed,
         "Suggested Promotions",
         promotion_lines,
-        f"No promotion suggestions. Requires {promotion_threshold:,}+ average, {MIN_PROMOTION_WARS}+ wars, and {MIN_LEADERBOARD_DAYS}+ days first-seen.",
+        f"No promotion suggestions. Requires {promotion_threshold:,}+ average, {MIN_PROMOTION_WARS}+ full wars, and {MIN_LEADERBOARD_DAYS}+ days first-seen.",
     )
 
+    suggested_rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    suggested_lines = [row[4] for row in suggested_rows]
     add_line_fields(
         embed,
         "Suggested Kick/Demotion",
-        suggested_rows,
+        suggested_lines,
         "No kick/demotion suggestions at the current threshold.",
         continuation_title="More Candidates",
     )
@@ -1176,8 +1282,8 @@ def build_bot() -> MicroBot:
                 f"Kick suggestion threshold: `{current_kick_threshold():,}` war fame\n"
                 f"Promotion suggestion threshold: `{current_promotion_threshold():,}` average war fame\n"
                 f"Rolling window: `{ROLLING_WAR_DAYS}` days\n"
-                f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
-                f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
+                f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
+                f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
                 "Join date note: Clash Royale does not expose true join date; this bot shows first seen."
             ),
             ephemeral=True,
