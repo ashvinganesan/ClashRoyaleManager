@@ -1613,12 +1613,10 @@ def build_bot() -> MicroBot:
         )
         await interaction.followup.send(embed=embed, ephemeral=False)
 
-    @bot.tree.command(name="show_stats", description="Show one clan member's war stats.")
-    @app_commands.describe(player="IGN or player tag, for example DaddyRizz")
-    @app_commands.describe(member="Verified Discord member to look up")
-    async def show_stats(interaction: discord.Interaction,
-                         player: Optional[str] = None,
-                         member: Optional[discord.Member] = None):
+    async def send_show_stats(interaction: discord.Interaction,
+                              player: Optional[str] = None,
+                              member: Optional[discord.Member] = None):
+        """Send one clan member's war stats."""
         if not settings.clan_tag:
             await interaction.response.send_message("No clan tag is configured for this bot.", ephemeral=True)
             return
@@ -1653,8 +1651,8 @@ def build_bot() -> MicroBot:
 
             if link is None:
                 await interaction.response.send_message(
-                    "Use `/show_stats player:DaddyRizz` or `/show_stats member:@someone`. "
-                    "If you verify first, `/show_stats` will show your own stats.",
+                    "Use `/show player:DaddyRizz` or `/show member:@someone`. "
+                    "If you verify first, `/show` will show your own stats.",
                     ephemeral=True,
                 )
                 return
@@ -1710,6 +1708,22 @@ def build_bot() -> MicroBot:
             current_promotion_threshold(),
         )
         await interaction.followup.send(embed=embed, ephemeral=False)
+
+    @bot.tree.command(name="show_stats", description="Show one clan member's war stats.")
+    @app_commands.describe(player="IGN or player tag, for example DaddyRizz")
+    @app_commands.describe(member="Verified Discord member to look up")
+    async def show_stats(interaction: discord.Interaction,
+                         player: Optional[str] = None,
+                         member: Optional[discord.Member] = None):
+        await send_show_stats(interaction, player, member)
+
+    @bot.tree.command(name="show", description="Show one clan member's war stats.")
+    @app_commands.describe(player="IGN or player tag, for example DaddyRizz")
+    @app_commands.describe(member="Verified Discord member to look up")
+    async def show(interaction: discord.Interaction,
+                   player: Optional[str] = None,
+                   member: Optional[discord.Member] = None):
+        await send_show_stats(interaction, player, member)
 
     @bot.tree.command(name="remove_verification", description="Remove a member's linked Clash Royale verification.")
     @app_commands.checks.has_permissions(administrator=True)

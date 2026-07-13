@@ -24,7 +24,7 @@ It is intentionally separate from the full historical manager while deployment i
 - `/war_config` shows the current war stat settings.
 - `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kick/demotion candidates.
 - `/last_war_bottom` posts a public rank 41+ audit from the latest completed war.
-- `/show_stats [player] [member]` posts public war stats for one player by IGN, player tag, verified Discord member, or your own verified account. It states whether the player is still in the current clan roster.
+- `/show_stats [player] [member]` and `/show [player] [member]` post public war stats for one player by IGN, player tag, verified Discord member, or your own verified account. They state whether the player is still in the current clan roster.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
 
@@ -36,9 +36,11 @@ It is intentionally separate from the full historical manager while deployment i
 4. Run `/set_verified_role @Verified`.
 5. Create a leader-only `#verification-confirmation` channel, or run `/set_verification_channel #channel-name` for a different channel.
 6. Leave one member verification channel visible to `@everyone`.
-7. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
+7. Hide the rest of the server from `@everyone`, then allow `Verified` to view channels, send messages, and use application commands in the normal categories/channels.
 
 Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
+
+`/war_stats`, `/last_war_bottom`, `/show_stats`, and `/show` are public bot commands. If a verified member cannot see them in Discord's slash-command picker, check that their channel/category permissions include **Use Application Commands** for the `Verified` role and that the bot is allowed in that channel.
 
 The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. If the request expires before a leader handles it, the fallback command with `player_tag` in the leader message can still direct-verify that member. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
 
@@ -48,7 +50,7 @@ The official Clash Royale API does not expose clan chat messages, so the microbo
 
 `/last_war_bottom` lists everyone who ranked below 40th in the latest completed war. It includes last-war fame, rolling full-war average, first-seen age, and whether the player is still in the clan or is already gone.
 
-`/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `/show_stats member:@someone` for a verified Discord member, or `/show_stats` for your own verified account.
+`/show player:DaddyRizz` or `/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `member:@someone` for a verified Discord member, or run `/show` for your own verified account.
 
 The default kick suggestion threshold is `2000` war fame. The default promotion suggestion threshold is `2500` average war fame.
 
