@@ -15,6 +15,7 @@ It is intentionally separate from the full historical manager while deployment i
 
 - `/verify <player_tag>` creates a short code for the member to post in Clash Royale clan chat.
 - `/confirm_verification <member> <player_tag>` lets a Discord admin approve the link after seeing the code.
+- `/remove_verification [member]` lets a Discord admin remove a member's linked account and verified role.
 - `/set_verified_role <role>` sets the role assigned after successful verification.
 - `/verification_config` shows the current verification role setting.
 - `/war_stats` posts the current Clan War/River Race snapshot for the configured clan.
@@ -30,7 +31,7 @@ It is intentionally separate from the full historical manager while deployment i
 5. Leave one verification channel visible to `@everyone`.
 6. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
 
-Only users with Discord administrator permission can run `/confirm_verification`, `/set_verified_role`, and `/verification_config`.
+Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, and `/verification_config`.
 
 ## Run
 

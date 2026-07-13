@@ -1,5 +1,6 @@
 """Tiny Discord bot entry point."""
 
+import asyncio
 import datetime as dt
 import logging
 import secrets
@@ -237,6 +238,33 @@ def build_bot() -> MicroBot:
 
         return f"Assigned {role.mention}."
 
+    async def remove_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
+        """Remove the configured verified role and return a user-facing note."""
+        role_id = current_verified_role_id()
+
+        if role_id is None:
+            return None
+
+        if interaction.guild is None:
+            return "Roles can only be changed inside the server."
+
+        role = interaction.guild.get_role(role_id)
+
+        if role is None:
+            return "The configured verified role was not found."
+
+        if role not in member.roles:
+            return None
+
+        try:
+            await member.remove_roles(role, reason="Clash Royale verification removed")
+        except discord.Forbidden:
+            return "I do not have permission to remove the verified role."
+        except discord.HTTPException:
+            return "Discord rejected the verified role removal."
+
+        return f"Removed {role.mention}."
+
     @bot.tree.command(name="bot_health", description="Show whether the lightweight bot is online.")
     async def bot_health(interaction: discord.Interaction):
         await interaction.response.send_message("Online. SQLite store is initialized.", ephemeral=True)
@@ -312,7 +340,7 @@ def build_bot() -> MicroBot:
         await interaction.response.defer(thinking=True, ephemeral=True)
 
         try:
-            player = clash.get_player(normalized_tag)
+            player = await asyncio.to_thread(clash.get_player, normalized_tag)
         except ClashNotFound:
             await interaction.followup.send("That player tag does not exist.", ephemeral=True)
             return
@@ -356,8 +384,10 @@ def build_bot() -> MicroBot:
         await interaction.response.defer(thinking=True)
 
         try:
-            race = clash.get_current_river_race(settings.clan_tag)
-            members = clash.get_clan_members(settings.clan_tag)
+            race, members = await asyncio.gather(
+                asyncio.to_thread(clash.get_current_river_race, settings.clan_tag),
+                asyncio.to_thread(clash.get_clan_members, settings.clan_tag),
+            )
         except ClashNotFound:
             await interaction.followup.send("The configured clan tag was not found.", ephemeral=True)
             return
@@ -366,6 +396,29 @@ def build_bot() -> MicroBot:
             return
 
         await interaction.followup.send(embed=build_war_stats_embed(race, members))
+
+    @bot.tree.command(name="remove_verification", description="Remove a member's linked Clash Royale verification.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(member="Discord member whose verification should be removed")
+    async def remove_verification(interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        target = member or interaction.user
+
+        if not isinstance(target, discord.Member):
+            await interaction.response.send_message("Choose a server member.", ephemeral=True)
+            return
+
+        link = store.remove_link_by_discord_id(target.id)
+        role_note = await remove_verified_role(interaction, target)
+
+        if link is None:
+            message = f"No linked Clash Royale account was found for {target.mention}."
+        else:
+            message = f"Removed verification for {target.mention}: {link['player_name']} `{link['player_tag']}`."
+
+        if role_note:
+            message += f"\n{role_note}"
+
+        await interaction.response.send_message(message, ephemeral=True)
 
     @bot.tree.command(name="confirm_verification", description="Leader confirmation after seeing a code in clan chat.")
     @app_commands.checks.has_permissions(administrator=True)
@@ -381,7 +434,7 @@ def build_bot() -> MicroBot:
             return
 
         try:
-            player = clash.get_player(normalized_tag)
+            player = await asyncio.to_thread(clash.get_player, normalized_tag)
         except ClashApiError:
             await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
@@ -416,6 +469,7 @@ def build_bot() -> MicroBot:
 
     @set_verified_role.error
     @verification_config.error
+    @remove_verification.error
     async def verification_admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
             await send_ephemeral(interaction, "Only server admins can manage verification settings.")

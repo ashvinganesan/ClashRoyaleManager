@@ -26,6 +26,27 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertIsNone(store.get_verified_role_id())
 
+    def test_remove_link_by_discord_id_removes_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+            store.approve_challenge(
+                challenge_id=99,
+                reviewer_discord_id=1,
+                discord_id=2,
+                discord_name="Tester",
+                player_tag="#ABC123",
+                player_name="Player",
+                clan_tag="#CLAN",
+                clan_name="Clan",
+            )
+
+            removed = store.remove_link_by_discord_id(2)
+
+            self.assertIsNotNone(removed)
+            self.assertEqual(removed["player_tag"], "#ABC123")
+            self.assertIsNone(store.get_link_by_discord_id(2))
+
 
 if __name__ == "__main__":
     unittest.main()

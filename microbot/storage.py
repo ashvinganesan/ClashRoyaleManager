@@ -177,6 +177,18 @@ class Store:
         with self.connect() as connection:
             return connection.execute("SELECT * FROM linked_accounts WHERE player_tag = ?", (player_tag,)).fetchone()
 
+    def remove_link_by_discord_id(self, discord_id: int) -> Optional[sqlite3.Row]:
+        """Remove a linked account and cancel pending challenges for a Discord id."""
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM linked_accounts WHERE discord_id = ?", (discord_id,)).fetchone()
+            connection.execute("DELETE FROM linked_accounts WHERE discord_id = ?", (discord_id,))
+            connection.execute(
+                "UPDATE verification_challenges SET status = 'cancelled' WHERE discord_id = ? AND status = 'pending'",
+                (discord_id,),
+            )
+
+        return row
+
     def approve_challenge(self,
                           challenge_id: int,
                           reviewer_discord_id: int,
