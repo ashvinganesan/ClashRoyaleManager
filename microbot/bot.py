@@ -141,6 +141,12 @@ def race_clan_from_log_item(log_item: dict, clan_tag: Optional[str]) -> Optional
     return None
 
 
+def can_be_promoted(member: dict) -> bool:
+    """Return whether a clan member can still receive an in-game promotion."""
+    role = str(member.get("role") or "").replace("_", "").replace("-", "").lower()
+    return role not in {"coleader", "leader"}
+
+
 async def send_ephemeral(interaction: discord.Interaction, message: str):
     """Send an ephemeral command response or followup."""
     if interaction.response.is_done():
@@ -492,7 +498,8 @@ def build_enhanced_war_stats_embed(race: dict,
                 and average_fame >= promotion_threshold
                 and race_count >= MIN_PROMOTION_WARS
                 and has_leaderboard_tenure
-                and current_fame >= kick_threshold):
+                and current_fame >= kick_threshold
+                and can_be_promoted(member)):
             promotion_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
 
         if low_current and low_average:

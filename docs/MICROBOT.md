@@ -53,7 +53,7 @@ Leaders can change them with:
 /set_promotion_threshold 2500
 ```
 
-Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars and 14 days first-seen tenure. Suggested kicks include members below the current-war threshold or rolling-average threshold; first-seen is shown as context for leaders, not as an automatic excuse.
+Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars, 14 days first-seen tenure, and an in-game role below co-leader. Suggested kicks include members below the current-war threshold or rolling-average threshold; first-seen is shown as context for leaders, not as an automatic excuse.
 
 Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running.
 
