@@ -363,6 +363,17 @@ def record_war_presence(store: Store,
                 )
 
 
+def refresh_war_presence(store: Store,
+                         clan_tag: Optional[str],
+                         race: dict,
+                         members_payload: dict,
+                         race_log: dict,
+                         now: dt.datetime) -> dict:
+    """Refresh member presence and return the stored presence map."""
+    record_war_presence(store, clan_tag, race, members_payload, race_log, now)
+    return store.get_member_presence_map()
+
+
 def score_line(name: str,
                current_fame: int,
                average_fame: Optional[float],
@@ -974,8 +985,15 @@ def build_bot() -> MicroBot:
             return
 
         now = dt.datetime.now(dt.timezone.utc)
-        record_war_presence(store, settings.clan_tag, race, members, race_log, now)
-        presence_map = store.get_member_presence_map()
+        presence_map = await asyncio.to_thread(
+            refresh_war_presence,
+            store,
+            settings.clan_tag,
+            race,
+            members,
+            race_log,
+            now,
+        )
         embed = build_enhanced_war_stats_embed(
             race,
             members,
