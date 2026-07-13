@@ -24,6 +24,29 @@ It is intentionally separate from the full historical manager while deployment i
 python3 -m microbot.bot
 ```
 
+## systemd
+
+The production service unit lives at:
+
+```text
+deploy/systemd/clash-royale-microbot.service
+```
+
+Install it on the VM:
+
+```bash
+sudo cp deploy/systemd/clash-royale-microbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable clash-royale-microbot
+sudo systemctl start clash-royale-microbot
+```
+
+Check logs:
+
+```bash
+journalctl -u clash-royale-microbot -f
+```
+
 Required environment variables:
 
 ```dotenv

@@ -1,0 +1,16 @@
+[Unit]
+Description=Clash Royale Discord microbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc/ClashRoyaleManager
+EnvironmentFile=/home/opc/ClashRoyaleManager/.env
+ExecStart=/home/opc/ClashRoyaleManager/.venv/bin/python -m microbot.bot
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
