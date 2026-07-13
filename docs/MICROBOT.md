@@ -23,6 +23,7 @@ It is intentionally separate from the full historical manager while deployment i
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
 - `/war_config` shows the current war stat settings.
 - `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kick/demotion candidates.
+- `/show_stats [player] [member]` posts public war stats for one player by IGN, player tag, verified Discord member, or your own verified account.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
 
@@ -43,6 +44,8 @@ The official Clash Royale API does not expose clan chat messages, so the microbo
 ## War Stats
 
 `/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history.
+
+`/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `/show_stats member:@someone` for a verified Discord member, or `/show_stats` for your own verified account.
 
 The default kick suggestion threshold is `2000` war fame. The default promotion suggestion threshold is `2500` average war fame.
 

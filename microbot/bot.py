@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import logging
+import re
 import secrets
 import string
 from typing import Any, Optional
@@ -24,6 +25,8 @@ MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
 RIVER_RACE_LOG_LIMIT = 10
 ROLLING_WAR_DAYS = 35
+DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
+PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
 ROLE_MARKERS = {
     "member": "🟫 Member",
     "elder": "🟩 Elder",
@@ -160,6 +163,26 @@ def normalized_role(member: dict) -> str:
 def role_label(member: dict) -> str:
     """Return a compact, colored role marker for Discord war rows."""
     return ROLE_MARKERS.get(normalized_role(member), f"⬜ {format_name(member.get('role') or 'Unknown')}")
+
+
+def discord_id_from_mention(value: str) -> Optional[int]:
+    """Extract a Discord user id from a mention string."""
+    match = DISCORD_MENTION_RE.fullmatch(value.strip())
+
+    if not match:
+        return None
+
+    return int(match.group(1))
+
+
+def is_likely_player_tag(value: str) -> bool:
+    """Return whether a query looks like a Clash Royale player tag."""
+    cleaned = value.strip().upper().replace("O", "0")
+
+    if cleaned.startswith("#"):
+        cleaned = cleaned[1:]
+
+    return bool(cleaned) and all(character in PLAYER_TAG_CHARACTERS for character in cleaned)
 
 
 async def send_ephemeral(interaction: discord.Interaction, message: str):
@@ -309,10 +332,12 @@ def collect_completed_war_stats(race_log: dict,
 
             entry = player_stats.setdefault(
                 player_tag,
-                {"name": participant.get("name", "Unknown"), "scores": []},
+                {"name": participant.get("name", "Unknown"), "scores": [], "entries": []},
             )
+            fame = int_value(participant.get("fame"))
             entry["name"] = participant.get("name", entry["name"])
-            entry["scores"].append(int_value(participant.get("fame")))
+            entry["scores"].append(fame)
+            entry["entries"].append({"date": completed_at, "fame": fame})
 
     return player_stats, race_dates
 
@@ -444,6 +469,242 @@ def add_line_fields(embed: discord.Embed,
     for index, chunk in enumerate(chunks, 1):
         field_title = title if index == 1 else (continuation_title or f"{title} ({index})")
         embed.add_field(name=field_title, value="\n".join(chunk), inline=False)
+
+
+def war_player_index(members_payload: dict, race: dict, historical_stats: dict) -> dict[str, dict]:
+    """Return known war players keyed by tag from roster, current race, and history."""
+    players: dict[str, dict] = {}
+
+    for member in members_payload.get("items") or []:
+        player_tag = member.get("tag")
+
+        if player_tag:
+            players[player_tag] = dict(member)
+
+    current_clan = race.get("clan") or {}
+
+    for participant in current_clan.get("participants") or []:
+        player_tag = participant.get("tag")
+
+        if not player_tag:
+            continue
+
+        player = players.setdefault(
+            player_tag,
+            {"tag": player_tag, "name": participant.get("name", "Unknown"), "role": "unknown"},
+        )
+        player["name"] = participant.get("name", player.get("name", "Unknown"))
+
+    for player_tag, history in historical_stats.items():
+        players.setdefault(
+            player_tag,
+            {"tag": player_tag, "name": history.get("name", "Unknown"), "role": "unknown"},
+        )
+
+    return players
+
+
+def resolve_war_player(query: str, players_by_tag: dict[str, dict]) -> tuple[Optional[dict], Optional[str]]:
+    """Resolve a player by exact/partial IGN or player tag."""
+    value = query.strip()
+
+    if not value:
+        return None, "Enter an IGN, player tag, or Discord member."
+
+    query_key = value.casefold()
+    exact_name_matches = [
+        player for player in players_by_tag.values()
+        if str(player.get("name") or "").casefold() == query_key
+    ]
+
+    if len(exact_name_matches) == 1:
+        return exact_name_matches[0], None
+
+    if len(exact_name_matches) > 1:
+        names = ", ".join(f"{format_name(player.get('name'))} `{player.get('tag')}`" for player in exact_name_matches[:8])
+        return None, f"Multiple players are named `{value}`: {names}. Use a player tag."
+
+    if is_likely_player_tag(value):
+        player_tag = normalize_tag(value)
+        player = players_by_tag.get(player_tag)
+
+        if player:
+            return player, None
+
+        return None, f"I could not find player tag `{player_tag}` in the current roster or recent war history."
+
+    partial_name_matches = [
+        player for player in players_by_tag.values()
+        if query_key in str(player.get("name") or "").casefold()
+    ]
+
+    if len(partial_name_matches) == 1:
+        return partial_name_matches[0], None
+
+    if len(partial_name_matches) > 1:
+        names = ", ".join(f"{format_name(player.get('name'))} `{player.get('tag')}`" for player in partial_name_matches[:8])
+        more = "" if len(partial_name_matches) <= 8 else f", and {len(partial_name_matches) - 8} more"
+        return None, f"`{value}` matched multiple players: {names}{more}. Use the exact IGN or player tag."
+
+    return None, f"I could not find `{value}` in the current roster or recent war history."
+
+
+def recommendation_text(label: str, ok: bool, detail: str) -> str:
+    """Format one recommendation status line."""
+    status = "Yes" if ok else "No"
+    return f"{label}: **{status}** - {detail}"
+
+
+def build_player_war_stats_embed(target: dict,
+                                 race: dict,
+                                 members_payload: dict,
+                                 race_log: dict,
+                                 presence_map: dict,
+                                 kick_threshold: int,
+                                 promotion_threshold: int) -> discord.Embed:
+    """Build current and rolling war stats for one player."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=ROLLING_WAR_DAYS)
+    current_clan = race.get("clan") or {}
+    current_participants = current_clan.get("participants") or []
+    current_by_tag = {participant.get("tag"): participant for participant in current_participants}
+    roster_by_tag = {
+        member.get("tag"): member
+        for member in members_payload.get("items") or []
+        if member.get("tag")
+    }
+    historical_stats, completed_race_dates = collect_completed_war_stats(race_log, current_clan.get("tag"), cutoff)
+    race_start = estimate_current_race_start(race, race_log, now)
+
+    player_tag = target.get("tag")
+    member = roster_by_tag.get(player_tag, target)
+    player_name = member.get("name", target.get("name", "Unknown"))
+    participant = current_by_tag.get(player_tag, {})
+    current_fame = int_value(participant.get("fame"))
+    decks_today = min(4, int_value(participant.get("decksUsedToday")))
+    decks_total = int_value(participant.get("decksUsed"))
+    history = historical_stats.get(player_tag, {})
+    scores = history.get("scores", [])
+    entries = sorted(history.get("entries", []), key=lambda entry: entry["date"], reverse=True)
+    race_count = len(scores)
+    average_fame = (sum(scores) / race_count) if race_count else None
+    best_fame = max(scores) if scores else None
+    low_fame = min(scores) if scores else None
+    presence = presence_map.get(player_tag)
+    first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
+    last_seen_at = parse_iso_datetime(presence["last_seen_at"]) if presence else None
+    has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
+    tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
+    low_current = current_fame < kick_threshold
+    low_or_missing_average = average_fame is None or average_fame < kick_threshold
+    should_kick_demote = low_current and low_or_missing_average
+    should_promote = (
+        average_fame is not None
+        and average_fame >= promotion_threshold
+        and race_count >= MIN_PROMOTION_WARS
+        and has_leaderboard_tenure
+        and current_fame >= kick_threshold
+        and can_be_promoted(member)
+    )
+
+    embed = discord.Embed(
+        title=f"{format_name(player_name)} War Stats",
+        description=f"{role_label(member)} `{player_tag or 'unknown tag'}`",
+        color=discord.Color.green() if current_fame >= kick_threshold else discord.Color.gold(),
+        timestamp=now,
+    )
+    embed.add_field(
+        name="Current War",
+        value=(
+            f"Fame: **{current_fame:,}**\n"
+            f"Decks today: **{decks_today}/4**\n"
+            f"Decks total: **{decks_total}**"
+        ),
+        inline=False,
+    )
+
+    average_text = f"{average_fame:,.0f}" if average_fame is not None else "n/a"
+    best_text = f"{best_fame:,}" if best_fame is not None else "n/a"
+    low_text = f"{low_fame:,}" if low_fame is not None else "n/a"
+    recent_lines = [
+        f"{short_date(entry['date'])}: {entry['fame']:,}"
+        for entry in entries[:5]
+    ]
+    embed.add_field(
+        name=f"Rolling {ROLLING_WAR_DAYS}-Day History",
+        value=(
+            f"Average: **{average_text}** over **{race_count}** completed wars\n"
+            f"Best / Low: **{best_text}** / **{low_text}**\n"
+            f"Recent: {', '.join(recent_lines) if recent_lines else 'No completed wars in window'}"
+        ),
+        inline=False,
+    )
+
+    first_seen_line = f"{short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)})"
+    last_seen_line = f"{short_date(last_seen_at)} ({days_ago_label(last_seen_at, now)})"
+    embed.add_field(
+        name="Clan Context",
+        value=(
+            f"First seen: **{first_seen_line}**\n"
+            f"Last seen: **{last_seen_line}**\n"
+            f"In current roster: **{'Yes' if player_tag in roster_by_tag else 'No'}**"
+        ),
+        inline=False,
+    )
+
+    if should_kick_demote:
+        if average_fame is not None:
+            kick_detail = "current and rolling average are below threshold"
+        elif tracked_after_race_start:
+            kick_detail = "current is below threshold; verify join timing"
+        else:
+            kick_detail = "current is below threshold and no completed-war average exists"
+    elif current_fame >= kick_threshold:
+        kick_detail = "current war is at or above threshold"
+    elif average_fame is not None and average_fame >= kick_threshold:
+        kick_detail = "rolling average is at or above threshold"
+    else:
+        kick_detail = "not enough completed-war history"
+
+    if should_promote:
+        promotion_detail = "meets average, tenure, current-war, and role requirements"
+    elif not can_be_promoted(member):
+        promotion_detail = "already co-leader or leader"
+    elif average_fame is None or average_fame < promotion_threshold:
+        promotion_detail = "average is below promotion threshold"
+    elif race_count < MIN_PROMOTION_WARS:
+        promotion_detail = f"requires {MIN_PROMOTION_WARS}+ completed wars"
+    elif not has_leaderboard_tenure:
+        promotion_detail = f"requires {MIN_LEADERBOARD_DAYS}+ days first-seen"
+    elif current_fame < kick_threshold:
+        promotion_detail = "current war is below kick threshold"
+    else:
+        promotion_detail = "does not meet promotion rules"
+
+    leaderboard_ok = average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure
+    leaderboard_detail = (
+        f"requires {MIN_LEADERBOARD_WARS}+ completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen"
+        if not leaderboard_ok
+        else "eligible for the rolling leaderboard"
+    )
+    embed.add_field(
+        name="Recommendations",
+        value=(
+            f"{recommendation_text('Kick/Demotion', should_kick_demote, kick_detail)}\n"
+            f"{recommendation_text('Promotion', should_promote, promotion_detail)}\n"
+            f"{recommendation_text('Leaderboard', leaderboard_ok, leaderboard_detail)}"
+        ),
+        inline=False,
+    )
+
+    completed_count = len(completed_race_dates)
+    embed.set_footer(
+        text=(
+            f"{completed_count} completed wars in window. "
+            f"Thresholds: kick {kick_threshold:,}, promotion {promotion_threshold:,} avg."
+        )
+    )
+    return embed
 
 
 def build_enhanced_war_stats_embed(race: dict,
@@ -1001,6 +1262,104 @@ def build_bot() -> MicroBot:
             now,
         )
         embed = build_enhanced_war_stats_embed(
+            race,
+            members,
+            race_log,
+            presence_map,
+            current_kick_threshold(),
+            current_promotion_threshold(),
+        )
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
+    @bot.tree.command(name="show_stats", description="Show one clan member's war stats.")
+    @app_commands.describe(player="IGN or player tag, for example DaddyRizz")
+    @app_commands.describe(member="Verified Discord member to look up")
+    async def show_stats(interaction: discord.Interaction,
+                         player: Optional[str] = None,
+                         member: Optional[discord.Member] = None):
+        if not settings.clan_tag:
+            await interaction.response.send_message("No clan tag is configured for this bot.", ephemeral=True)
+            return
+
+        player_query = (player or "").strip()
+        linked_tag = None
+        linked_name = None
+
+        if member is not None:
+            link = store.get_link_by_discord_id(member.id)
+
+            if link is None:
+                await interaction.response.send_message(f"{member.mention} is not verified yet.", ephemeral=True)
+                return
+
+            linked_tag = link["player_tag"]
+            linked_name = link["player_name"]
+        elif player_query:
+            mention_id = discord_id_from_mention(player_query)
+
+            if mention_id is not None:
+                link = store.get_link_by_discord_id(mention_id)
+
+                if link is None:
+                    await interaction.response.send_message(f"<@{mention_id}> is not verified yet.", ephemeral=True)
+                    return
+
+                linked_tag = link["player_tag"]
+                linked_name = link["player_name"]
+        else:
+            link = store.get_link_by_discord_id(interaction.user.id)
+
+            if link is None:
+                await interaction.response.send_message(
+                    "Use `/show_stats player:DaddyRizz` or `/show_stats member:@someone`. "
+                    "If you verify first, `/show_stats` will show your own stats.",
+                    ephemeral=True,
+                )
+                return
+
+            linked_tag = link["player_tag"]
+            linked_name = link["player_name"]
+
+        await interaction.response.defer(thinking=True, ephemeral=False)
+
+        try:
+            race, members, race_log = await asyncio.gather(
+                asyncio.to_thread(clash.get_current_river_race, settings.clan_tag),
+                asyncio.to_thread(clash.get_clan_members, settings.clan_tag),
+                asyncio.to_thread(clash.get_river_race_log, settings.clan_tag, RIVER_RACE_LOG_LIMIT),
+            )
+        except ClashNotFound:
+            await interaction.followup.send("The configured clan tag was not found.", ephemeral=True)
+            return
+        except ClashApiError:
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            return
+
+        now = dt.datetime.now(dt.timezone.utc)
+        cutoff = now - dt.timedelta(days=ROLLING_WAR_DAYS)
+        historical_stats, _ = collect_completed_war_stats(race_log, (race.get("clan") or {}).get("tag"), cutoff)
+        players_by_tag = war_player_index(members, race, historical_stats)
+
+        if linked_tag:
+            target = players_by_tag.get(linked_tag) or {"tag": linked_tag, "name": linked_name or "Unknown", "role": "unknown"}
+        else:
+            target, error = resolve_war_player(player_query, players_by_tag)
+
+            if error:
+                await interaction.followup.send(error, ephemeral=True)
+                return
+
+        presence_map = await asyncio.to_thread(
+            refresh_war_presence,
+            store,
+            settings.clan_tag,
+            race,
+            members,
+            race_log,
+            now,
+        )
+        embed = build_player_war_stats_embed(
+            target,
             race,
             members,
             race_log,

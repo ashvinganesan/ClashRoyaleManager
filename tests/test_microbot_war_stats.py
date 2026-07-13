@@ -5,7 +5,13 @@ import unittest
 DISCORD_AVAILABLE = importlib.util.find_spec("discord") is not None
 
 if DISCORD_AVAILABLE:
-    from microbot.bot import build_enhanced_war_stats_embed
+    from microbot.bot import (
+        build_enhanced_war_stats_embed,
+        build_player_war_stats_embed,
+        collect_completed_war_stats,
+        resolve_war_player,
+        war_player_index,
+    )
 
 
 def clash_time(value: dt.datetime) -> str:
@@ -80,6 +86,61 @@ class MicrobotWarStatsTests(unittest.TestCase):
         self.assertNotIn("Metro Franky", kick_text)
         self.assertIn("🟩 Elder KING AJ", leaders_text)
         self.assertIn("🟥 Co-leader Metro Franky", leaders_text)
+
+    def test_player_stats_can_resolve_ign_and_show_recommendation(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        first_seen = (now - dt.timedelta(days=21)).isoformat()
+        tag = "#P2Y0R"
+        race = {
+            "periodIndex": 6,
+            "clan": {
+                "name": "A Clan Reborn",
+                "tag": "#CLAN",
+                "participants": [
+                    {"tag": tag, "name": "DaddyRizz", "fame": 700, "decksUsedToday": 1, "decksUsed": 12},
+                ],
+            },
+        }
+        members_payload = {"items": [{"tag": tag, "name": "DaddyRizz", "role": "elder"}]}
+        race_log = {
+            "items": [
+                {
+                    "createdDate": clash_time(now - dt.timedelta(days=7)),
+                    "standings": [{"clan": {"tag": "#CLAN", "participants": [{"tag": tag, "name": "DaddyRizz", "fame": 1850}]}}],
+                },
+                {
+                    "createdDate": clash_time(now - dt.timedelta(days=14)),
+                    "standings": [{"clan": {"tag": "#CLAN", "participants": [{"tag": tag, "name": "DaddyRizz", "fame": 1900}]}}],
+                },
+            ]
+        }
+        historical_stats, _ = collect_completed_war_stats(race_log, "#CLAN", now - dt.timedelta(days=35))
+        players_by_tag = war_player_index(members_payload, race, historical_stats)
+
+        target, error = resolve_war_player("DaddyRizz", players_by_tag)
+        partial_target, partial_error = resolve_war_player("Daddy", players_by_tag)
+
+        self.assertIsNone(error)
+        self.assertIsNone(partial_error)
+        self.assertEqual(target["tag"], tag)
+        self.assertEqual(partial_target["tag"], tag)
+
+        embed = build_player_war_stats_embed(
+            target,
+            race,
+            members_payload,
+            race_log,
+            {tag: {"first_seen_at": first_seen, "last_seen_at": now.isoformat()}},
+            2000,
+            2500,
+        )
+        recommendations = field_text(embed, "Recommendations")
+        history = field_text(embed, "Rolling 35-Day History")
+
+        self.assertEqual(embed.title, "DaddyRizz War Stats")
+        self.assertIn("🟩 Elder", embed.description)
+        self.assertIn("Average: **1,875**", history)
+        self.assertIn("Kick/Demotion: **Yes**", recommendations)
 
 
 if __name__ == "__main__":
