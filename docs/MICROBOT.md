@@ -99,6 +99,16 @@ Check logs:
 journalctl -u clash-royale-microbot -f
 ```
 
+## Micro VM Hardening
+
+The Oracle `VM.Standard.E2.1.Micro` image has very little RAM. Keep SSH closed to internet-wide scanners and disable optional background collectors:
+
+```bash
+sudo SSH_ALLOWED_CIDR=x.x.x.x/32 /home/opc/ClashRoyaleManager/deploy/bin/harden-micro-vm
+```
+
+Use the current trusted public IP for `SSH_ALLOWED_CIDR`. If SSH stops working after an IP change, update the VM firewall from an Oracle console session or temporarily adjust the VCN security rules, then rerun this command with the new CIDR.
+
 Required environment variables:
 
 ```dotenv
