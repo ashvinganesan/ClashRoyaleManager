@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+SSH_ALLOWED_CIDR="${SSH_ALLOWED_CIDR:-}"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run as root, for example: sudo SSH_ALLOWED_CIDR=x.x.x.x/32 $0" >&2
+    exit 1
+fi
+
+if [ -z "$SSH_ALLOWED_CIDR" ]; then
+    echo "Set SSH_ALLOWED_CIDR to the trusted source CIDR for SSH." >&2
+    exit 1
+fi
+
+firewall-cmd --zone=public --add-rich-rule="rule family=ipv4 source address=$SSH_ALLOWED_CIDR port port=22 protocol=tcp accept"
+firewall-cmd --zone=public --remove-service=ssh || true
+firewall-cmd --permanent --zone=public --add-rich-rule="rule family=ipv4 source address=$SSH_ALLOWED_CIDR port port=22 protocol=tcp accept"
+firewall-cmd --permanent --zone=public --remove-service=ssh || true
+
+cat >/etc/ssh/sshd_config.d/10-clash-bot-hardening.conf <<'EOF'
+LoginGraceTime 20
+MaxStartups 2:30:5
+PerSourceMaxStartups 1
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+sshd -t
+systemctl reload sshd
+
+systemctl disable --now \
+    pmcd.service \
+    pmie.service \
+    pmie_farm.service \
+    pmlogger.service \
+    pmlogger_farm.service \
+    dnf-makecache.timer \
+    ksplice-agent.timer \
+    ksplice-prefetch.service \
+    ksplice.service 2>/dev/null || true
+
+systemctl stop \
+    pmie_check.timer \
+    pmie_daily.timer \
+    pmie_farm_check.timer \
+    pmlogger_check.timer \
+    pmlogger_daily.timer \
+    pmlogger_farm_check.timer 2>/dev/null || true
+
+pkill -f 'sshd: \[accepted\]' 2>/dev/null || true
+
+firewall-cmd --zone=public --list-all
+sshd -T | egrep 'passwordauthentication|kbdinteractiveauthentication|permitrootlogin|maxstartups|persourcemaxstartups|logingracetime'

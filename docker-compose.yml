@@ -1,0 +1,60 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-clash_royale_manager}
+      MYSQL_USER: ${MYSQL_USER:-clash_royale_manager}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db_schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      CLASH_ROYALE_API_TOKEN: ${CLASH_ROYALE_API_TOKEN:-}
+      CLAN_TAG: ${CLAN_TAG:-}
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-clash_royale_manager}
+      MYSQL_USER: ${MYSQL_USER:-clash_royale_manager}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      BOT_TIMEZONE: ${BOT_TIMEZONE:-UTC}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ADMIN_ALERT_CHANNEL_ID: ${ADMIN_ALERT_CHANNEL_ID:-}
+      EXPORT_CHANNEL_ID: ${EXPORT_CHANNEL_ID:-}
+      WAR_REMINDER_CHANNEL_ID: ${WAR_REMINDER_CHANNEL_ID:-}
+      NEW_MEMBER_CHANNEL_ID: ${NEW_MEMBER_CHANNEL_ID:-}
+      STRIKE_REVIEW_CHANNEL_ID: ${STRIKE_REVIEW_CHANNEL_ID:-}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      PROBATION_COMPLETED_RACES_REQUIRED: ${PROBATION_COMPLETED_RACES_REQUIRED:-2}
+      PARTICIPATION_FULL_RACE_EXPECTED_DECKS: ${PARTICIPATION_FULL_RACE_EXPECTED_DECKS:-16}
+      PARTICIPATION_MINIMUM_COMPLIANT_DECKS: ${PARTICIPATION_MINIMUM_COMPLIANT_DECKS:-12}
+      REVIEW_MOVING_WINDOW_RACES: ${REVIEW_MOVING_WINDOW_RACES:-4}
+      REVIEW_UNEXCUSED_STRIKES_FOR_REVIEW: ${REVIEW_UNEXCUSED_STRIKES_FOR_REVIEW:-3}
+      REVIEW_STRIKE_WINDOW_RACES: ${REVIEW_STRIKE_WINDOW_RACES:-6}
+      AUTOMATIC_KICKING: ${AUTOMATIC_KICKING:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backups:/app/backups
+      - ./card_images:/app/card_images
+      - ./deck_images:/app/deck_images
+      - ./export_data:/app/export_data
+      - ./kick_images:/app/kick_images
+      - ./logs:/app/logs
+
+volumes:
+  db_data:

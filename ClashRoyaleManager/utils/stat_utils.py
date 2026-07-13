@@ -1,7 +1,6 @@
 """Various utilities for tracking and analyzing Battle Day statistics."""
 
 import datetime
-import numpy
 from typing import Dict, List, Tuple, Union
 
 import utils.clash_utils as clash_utils
@@ -17,6 +16,7 @@ from utils.custom_types import (
     UserStrikeData
 )
 from utils.exceptions import GeneralAPIError
+from utils.war_math import average_medals_per_deck, calculate_win_rate_from_average_medals
 
 def update_clan_battle_day_stats(tag: str, post_race: bool, api_is_broken: bool):
     """Check the battle logs of any users in a clan that have gained medals since the last check.
@@ -230,49 +230,6 @@ def determine_strikes(clan_strike_data: ClanStrikeInfo) -> List[UserStrikeData]:
             )
 
     return strikes
-
-
-def average_medals_per_deck(win_rate: float) -> float:
-    """Get the average medals per deck value at the specified win rate.
-
-    Assumes the player always plays 4 battles by playing a duel followed by normal matches (no boat battles). It's also assumed that
-    win rate is the same in duels and normal matches.
-
-    Medals per deck of a player that completes 4 battles with these assumptions can be calculated as
-    F(p) = -25p^3 + 25p^2 + 125p + 100 where F(p) is medals per deck and p is probability of winning any given match (win rate). This
-    was determined by calculating the expected number of duel matches played in a Bo3 at a given win rate, then subtracting that
-    from 4 to determine how many normal matches are played. These quantities are then multiplied by the average amount of medals a
-    deck is worth in each game mode. This is equal to f = 250p + 100(1-p) for duels and f = 200p + 100(1-p) for normal matches.
-
-    Args:
-        win_rate: Player win rate in PvP matches.
-
-    Returns:
-        Average medals per deck used.
-    """
-    return (-25 * win_rate**3) + (25 * win_rate**2) + (125 * win_rate) + 100
-
-
-def calculate_win_rate_from_average_medals(avg_medals_per_deck: float) -> float:
-    """Solve the polynomial described in average_medals_per_deck.
-
-    Determine what win rate is needed to achieve the specified medals per deck. All assumptions described above hold true here as
-    well. If no roots can be determined, then None is returned.
-
-    Args:
-        avg_medals_per_deck: Average medals per deck to calculate win rate of.
-
-    Returns:
-        Win rate needed to achieve the specified average medals per deck, or None if no solution exists.
-    """
-    roots = numpy.roots([-25, 25, 125, (100 - avg_medals_per_deck)])
-    win_rate = None
-
-    for root in roots:
-        if 0 <= root <= 1:
-            win_rate = root
-
-    return win_rate
 
 
 def predict_race_outcome(tag: str, historical_win_rates: bool, historical_deck_usage: bool) -> List[PredictedOutcome]:

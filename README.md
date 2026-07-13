@@ -10,10 +10,10 @@ Clash Royale Manager is an upgraded version of [ClashBot](https://github.com/chr
 
 ## Setup
 
-Before using this bot, you must first create its database, provide your Discord guild's ID, and use the bot's setup commands in Discord. Start by cloning this repository with the command
+Before using this bot, you must first create its database, configure environment variables, and use the bot's setup commands in Discord. Start by cloning this repository with the command
 
 ```
-git clone https://github.com/chradajan/ClashRoyaleManager
+git clone https://github.com/ashvinganesan/ClashRoyaleManager.git
 ```
 
 ### Database
@@ -24,12 +24,9 @@ Clash Royale Manager uses a MySQL database for storing users' Clash Royale data 
 mysql -u <USERNAME> -p <DATABASE NAME> < db_schema.sql
 ```
 
-After the database is created, you must enter your Discord guild's ID. This can be found by going into Discord Settings > Advanced > Enable Developer Mode. Once developer mode is enabled, simply right click your Discord server and select "Copy ID". Enter this into the database with the command
+After the database is created, provide your Discord guild's ID in `.env` as `DISCORD_GUILD_ID`. This can be found by going into Discord Settings > Advanced > Enable Developer Mode. Once developer mode is enabled, right click your Discord server and select "Copy ID".
 
-```sql
-mysql -u <USERNAME> -p <DATABASE NAME> -e "INSERT INTO variables VALUES (FALSE, <Guild ID>);"
-```
-replacing \<USERNAME>, \<DATABASE NAME>, and \<Guild ID> with their respective values.
+Existing legacy installations may still have the guild ID stored in the `variables` table. New installs should use the environment variable.
 
 ### Discord Developer
 
@@ -59,23 +56,26 @@ All Clash Royale data gathered by Clash Royale Manager comes from the official C
 
 ### Config
 
-From the root directory of your cloned repository, navigate to `./ClashRoyaleManager/config/`. Create a Python file in this directory called `credentials.py`. Populate this file with the following information:
+Configuration is read from environment variables. For local development, copy the example file and fill in the values:
 
-```python
-# Discord bot token
-BOT_TOKEN = "<Your bot's token>"
-
-# Clash Royale API key
-CLASH_API_KEY = "<Your Clash Royale API key>"
-
-# Database information
-IP = "<IP address of your MySQL server>"
-USERNAME = "<Your database's username>"
-PASSWORD = "<Your database's password>"
-DATABASE_NAME = "<Your database's name>"
+```bash
+cp .env.example .env
 ```
 
-substituting the text enclosed in angle brackets with the relevant keys generated in the previous steps. These keys must all be enclosed in double quotes.
+Required values include:
+
+```dotenv
+DISCORD_BOT_TOKEN=
+DISCORD_GUILD_ID=
+CLASH_ROYALE_API_TOKEN=
+MYSQL_HOST=
+MYSQL_PORT=3306
+MYSQL_DATABASE=
+MYSQL_USER=
+MYSQL_PASSWORD=
+```
+
+Do not commit `.env`, API tokens, Discord tokens, database passwords, SSH keys, or production backups. The bot loads `.env` for local runs and also works with normal environment variables injected by Docker or the host.
 
 ### Starting the Bot
 

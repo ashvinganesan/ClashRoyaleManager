@@ -1,0 +1,7 @@
+aiocron==1.4
+discord.py==2.0.1
+prettytable==2.1.0
+PyMySQL==1.0.2
+requests==2.22.0
+setuptools==45.2.0
+XlsxWriter==3.0.1

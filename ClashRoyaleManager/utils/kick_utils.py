@@ -5,9 +5,7 @@ import re
 from difflib import SequenceMatcher
 from typing import List, Tuple, Union
 
-import cv2
 import discord
-import pytesseract
 
 import utils.clash_utils as clash_utils
 import utils.db_utils as db_utils
@@ -74,6 +72,10 @@ async def get_player_info_from_image(image: discord.Attachment) -> Tuple[Union[s
 
     file_path += '/' + image.filename
     await image.save(file_path)
+
+    import cv2
+    import pytesseract
+
     img = cv2.imread(file_path)
     text = pytesseract.image_to_string(img)
     os.remove(file_path)

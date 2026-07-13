@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Clash Royale Discord microbot heartbeat
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
