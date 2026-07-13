@@ -123,6 +123,38 @@ class Store:
         except ValueError:
             return None
 
+    def set_elder_role_id(self, role_id: int):
+        """Persist the Discord role id assigned to in-game elders."""
+        self.set_setting("elder_role_id", str(role_id))
+
+    def get_elder_role_id(self) -> Optional[int]:
+        """Return the configured Discord elder role id."""
+        value = self.get_setting("elder_role_id")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def set_coleader_role_id(self, role_id: int):
+        """Persist the Discord role id assigned to in-game co-leaders/leaders."""
+        self.set_setting("coleader_role_id", str(role_id))
+
+    def get_coleader_role_id(self) -> Optional[int]:
+        """Return the configured Discord co-leader role id."""
+        value = self.get_setting("coleader_role_id")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
     def set_verification_channel_id(self, channel_id: int):
         """Persist the Discord channel id used for verification review."""
         self.set_setting("verification_channel_id", str(channel_id))

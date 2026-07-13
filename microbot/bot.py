@@ -22,6 +22,8 @@ DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
 DEFAULT_KICK_THRESHOLD = 2000
 DEFAULT_PROMOTION_THRESHOLD = 2500
 CONFIRM_VERIFICATION_ROLE_NAMES = {"elder"}
+DEFAULT_ELDER_ROLE_NAMES = {"elder"}
+DEFAULT_COLEADER_ROLE_NAMES = {"co-leader", "co leader", "coleader"}
 MIN_LEADERBOARD_WARS = 2
 MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
@@ -162,6 +164,19 @@ def can_be_promoted(member: dict) -> bool:
 def normalized_role(member: dict) -> str:
     """Return a normalized Clash Royale clan role key."""
     return str(member.get("role") or "member").replace("_", "").replace("-", "").lower()
+
+
+def player_role_key(player: dict) -> Optional[str]:
+    """Return a normalized role from a player payload when the API includes one."""
+    if player.get("role"):
+        return normalized_role(player)
+
+    clan = player.get("clan") or {}
+
+    if clan.get("role"):
+        return normalized_role(clan)
+
+    return None
 
 
 def role_label(member: dict) -> str:
@@ -1187,6 +1202,14 @@ def build_bot() -> MicroBot:
         """Return the configured verified role, preferring the database setting."""
         return store.get_verified_role_id() or settings.verified_role_id
 
+    def current_elder_role_id() -> Optional[int]:
+        """Return the configured Discord elder role."""
+        return store.get_elder_role_id()
+
+    def current_coleader_role_id() -> Optional[int]:
+        """Return the configured Discord co-leader role."""
+        return store.get_coleader_role_id()
+
     def current_verification_channel_id() -> Optional[int]:
         """Return the configured verification review channel."""
         return store.get_verification_channel_id()
@@ -1203,6 +1226,87 @@ def build_bot() -> MicroBot:
         """Return whether /verify should immediately link current clan tags."""
         return store.get_auto_verification_enabled()
 
+    def find_guild_role_by_name(guild: discord.Guild, role_names: set[str]) -> Optional[discord.Role]:
+        """Return the first guild role matching one of the configured names."""
+        for role in guild.roles:
+            if role.name.casefold() in role_names:
+                return role
+
+        return None
+
+    def resolve_guild_role(guild: discord.Guild,
+                           role_id: Optional[int],
+                           fallback_names: set[str]) -> Optional[discord.Role]:
+        """Find a configured role by id, falling back to a conventional role name."""
+        if role_id is not None:
+            role = guild.get_role(role_id)
+
+            if role is not None:
+                return role
+
+        return find_guild_role_by_name(guild, fallback_names)
+
+    def role_setup_notes(interaction: discord.Interaction, role: discord.Role) -> list[str]:
+        """Return setup notes for a Discord role the bot will assign."""
+        notes = []
+        bot_member = interaction.guild.me if interaction.guild else None
+
+        if bot_member and bot_member.top_role <= role:
+            notes.append("Move the bot's role above this role in Server Settings > Roles so it can assign it.")
+
+        if not interaction.app_permissions.manage_roles:
+            notes.append("The bot also needs the Manage Roles permission.")
+
+        return notes
+
+    async def assign_role(interaction: discord.Interaction,
+                          member: discord.Member,
+                          role: discord.Role,
+                          reason: str) -> Optional[str]:
+        """Assign a Discord role and return a user-facing note."""
+        if role in member.roles:
+            return None
+
+        bot_member = interaction.guild.me if interaction.guild else None
+
+        if bot_member and bot_member.top_role <= role:
+            return f"I could not assign {role.mention}. My role must be above it in Server Settings > Roles."
+
+        if not interaction.app_permissions.manage_roles:
+            return f"I could not assign {role.mention}. I need the Manage Roles permission."
+
+        try:
+            await member.add_roles(role, reason=reason)
+        except discord.Forbidden:
+            return f"I could not assign {role.mention}. I need Manage Roles and a role above it."
+        except discord.HTTPException:
+            return f"Discord rejected the {role.mention} role assignment."
+
+        return f"Assigned {role.mention}."
+
+    async def current_clash_role(player: dict) -> str:
+        """Return the player's current in-game clan role."""
+        role_key = player_role_key(player)
+
+        if role_key is not None:
+            return role_key
+
+        if not settings.clan_tag:
+            return "member"
+
+        try:
+            members = await asyncio.to_thread(clash.get_clan_members, settings.clan_tag)
+        except ClashApiError:
+            return "member"
+
+        player_tag = normalize_tag(player.get("tag", ""))
+
+        for member in members.get("items") or []:
+            if normalize_tag(member.get("tag", "")) == player_tag:
+                return normalized_role(member)
+
+        return "member"
+
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
         role_id = current_verified_role_id()
@@ -1218,14 +1322,42 @@ def build_bot() -> MicroBot:
         if role is None:
             return "The account is verified, but the configured verified role was not found."
 
-        try:
-            await member.add_roles(role, reason="Clash Royale clan verification")
-        except discord.Forbidden:
-            return "The account is verified, but I do not have permission to assign the verified role."
-        except discord.HTTPException:
-            return "The account is verified, but Discord rejected the role assignment."
+        return await assign_role(interaction, member, role, "Clash Royale clan verification")
 
-        return f"Assigned {role.mention}."
+    async def add_clash_status_role(interaction: discord.Interaction,
+                                    member: discord.Member,
+                                    player: dict) -> Optional[str]:
+        """Assign an optional Discord role that mirrors the player's in-game clan role."""
+        if interaction.guild is None:
+            return None
+
+        role_key = await current_clash_role(player)
+
+        if role_key == "elder":
+            role = resolve_guild_role(
+                interaction.guild,
+                current_elder_role_id(),
+                DEFAULT_ELDER_ROLE_NAMES,
+            )
+
+            if role is None:
+                return "No Discord Elder role was found. Create `Elder` or run `/set_elder_role`."
+
+            return await assign_role(interaction, member, role, "Clash Royale elder verification")
+
+        if role_key in {"coleader", "leader"}:
+            role = resolve_guild_role(
+                interaction.guild,
+                current_coleader_role_id(),
+                DEFAULT_COLEADER_ROLE_NAMES,
+            )
+
+            if role is None:
+                return "No Discord Co-Leader role was found. Create `Co-Leader` or run `/set_coleader_role`."
+
+            return await assign_role(interaction, member, role, "Clash Royale co-leader verification")
+
+        return None
 
     async def remove_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Remove the configured verified role and return a user-facing note."""
@@ -1253,6 +1385,39 @@ def build_bot() -> MicroBot:
             return "Discord rejected the verified role removal."
 
         return f"Removed {role.mention}."
+
+    async def remove_clash_status_roles(interaction: discord.Interaction,
+                                        member: discord.Member) -> list[str]:
+        """Remove Discord roles that mirror in-game clan status."""
+        if interaction.guild is None:
+            return []
+
+        roles = [
+            resolve_guild_role(interaction.guild, current_elder_role_id(), DEFAULT_ELDER_ROLE_NAMES),
+            resolve_guild_role(interaction.guild, current_coleader_role_id(), DEFAULT_COLEADER_ROLE_NAMES),
+        ]
+        notes = []
+        seen_role_ids = set()
+
+        for role in roles:
+            if role is None or role.id in seen_role_ids:
+                continue
+
+            seen_role_ids.add(role.id)
+
+            if role not in member.roles:
+                continue
+
+            try:
+                await member.remove_roles(role, reason="Clash Royale verification removed")
+            except discord.Forbidden:
+                notes.append(f"I do not have permission to remove {role.mention}.")
+            except discord.HTTPException:
+                notes.append(f"Discord rejected removal of {role.mention}.")
+            else:
+                notes.append(f"Removed {role.mention}.")
+
+        return notes
 
     async def set_member_nickname(member: discord.Member, nickname: str) -> Optional[str]:
         """Set a member's server nickname and return a user-facing note."""
@@ -1410,17 +1575,43 @@ def build_bot() -> MicroBot:
             await interaction.response.send_message("Choose a normal role, not @everyone.", ephemeral=True)
             return
 
-        notes = []
-        bot_member = interaction.guild.me if interaction.guild else None
-
-        if bot_member and bot_member.top_role <= role:
-            notes.append("Move the bot's role above this role in Server Settings > Roles so it can assign it.")
-
-        if not interaction.app_permissions.manage_roles:
-            notes.append("The bot also needs the Manage Roles permission.")
-
+        notes = role_setup_notes(interaction, role)
         store.set_verified_role_id(role.id)
         message = f"Verified role set to {role.mention}."
+
+        if notes:
+            message += "\n" + "\n".join(notes)
+
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @bot.tree.command(name="set_elder_role", description="Set the Discord role assigned to in-game Clash elders.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(role="Discord role to assign when a verified player is an in-game Elder")
+    async def set_elder_role(interaction: discord.Interaction, role: discord.Role):
+        if role.is_default():
+            await interaction.response.send_message("Choose a normal role, not @everyone.", ephemeral=True)
+            return
+
+        notes = role_setup_notes(interaction, role)
+        store.set_elder_role_id(role.id)
+        message = f"Elder role set to {role.mention}."
+
+        if notes:
+            message += "\n" + "\n".join(notes)
+
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @bot.tree.command(name="set_coleader_role", description="Set the Discord role assigned to Clash co-leaders/leaders.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(role="Discord role to assign when a verified player is an in-game Co-Leader or Leader")
+    async def set_coleader_role(interaction: discord.Interaction, role: discord.Role):
+        if role.is_default():
+            await interaction.response.send_message("Choose a normal role, not @everyone.", ephemeral=True)
+            return
+
+        notes = role_setup_notes(interaction, role)
+        store.set_coleader_role_id(role.id)
+        message = f"Co-Leader role set to {role.mention}."
 
         if notes:
             message += "\n" + "\n".join(notes)
@@ -1474,6 +1665,8 @@ def build_bot() -> MicroBot:
     @app_commands.checks.has_permissions(administrator=True)
     async def verification_config(interaction: discord.Interaction):
         role_id = current_verified_role_id()
+        elder_role_id = current_elder_role_id()
+        coleader_role_id = current_coleader_role_id()
         channel_id = current_verification_channel_id()
         lines = []
 
@@ -1483,6 +1676,37 @@ def build_bot() -> MicroBot:
             role = interaction.guild.get_role(role_id) if interaction.guild else None
             role_label = role.mention if role else f"`{role_id}` (not found)"
             lines.append(f"Verified role: {role_label}")
+
+        if interaction.guild:
+            elder_role = resolve_guild_role(
+                interaction.guild,
+                elder_role_id,
+                DEFAULT_ELDER_ROLE_NAMES,
+            )
+            coleader_role = resolve_guild_role(
+                interaction.guild,
+                coleader_role_id,
+                DEFAULT_COLEADER_ROLE_NAMES,
+            )
+        else:
+            elder_role = None
+            coleader_role = None
+
+        if elder_role:
+            source = "configured" if elder_role_id else "auto-detected by name"
+            lines.append(f"Elder role: {elder_role.mention} ({source})")
+        elif elder_role_id:
+            lines.append(f"Elder role: `{elder_role_id}` (not found)")
+        else:
+            lines.append("Elder role: not configured; will auto-detect a role named `Elder`")
+
+        if coleader_role:
+            source = "configured" if coleader_role_id else "auto-detected by name"
+            lines.append(f"Co-Leader role: {coleader_role.mention} ({source})")
+        elif coleader_role_id:
+            lines.append(f"Co-Leader role: `{coleader_role_id}` (not found)")
+        else:
+            lines.append("Co-Leader role: not configured; will auto-detect a role named `Co-Leader`")
 
         if channel_id is None:
             lines.append("Leader verification channel: not configured")
@@ -1600,12 +1824,16 @@ def build_bot() -> MicroBot:
                 clan_name,
             )
             role_note = await add_verified_role(interaction, interaction.user)
+            clan_role_note = await add_clash_status_role(interaction, interaction.user, player)
             nickname_note = await set_member_nickname(interaction.user, player["name"])
             announcement_note = await announce_auto_verification(interaction, player, clan_tag, clan_name)
             message = f"Auto confirmed {interaction.user.mention} as {player['name']} `{player['tag']}`."
 
             if role_note:
                 message += f"\n{role_note}"
+
+            if clan_role_note:
+                message += f"\n{clan_role_note}"
 
             if nickname_note:
                 message += f"\n{nickname_note}"
@@ -1840,6 +2068,7 @@ def build_bot() -> MicroBot:
     async def remove_verification(interaction: discord.Interaction, member: discord.Member):
         link = store.remove_link_by_discord_id(member.id)
         role_note = await remove_verified_role(interaction, member)
+        clan_role_notes = await remove_clash_status_roles(interaction, member)
 
         if link is None:
             message = f"No linked Clash Royale account was found for {member.mention}."
@@ -1848,6 +2077,9 @@ def build_bot() -> MicroBot:
 
         if role_note:
             message += f"\n{role_note}"
+
+        if clan_role_notes:
+            message += "\n" + "\n".join(clan_role_notes)
 
         await interaction.response.send_message(message, ephemeral=True)
 
@@ -1928,6 +2160,7 @@ def build_bot() -> MicroBot:
             )
 
         role_note = await add_verified_role(interaction, member)
+        clan_role_note = await add_clash_status_role(interaction, member, player)
         nickname_note = await set_member_nickname(member, player["name"])
 
         message = f"Verified {member.mention} as {player['name']} `{player['tag']}`."
@@ -1937,6 +2170,9 @@ def build_bot() -> MicroBot:
 
         if role_note:
             message += f"\n{role_note}"
+
+        if clan_role_note:
+            message += f"\n{clan_role_note}"
 
         if nickname_note:
             message += f"\n{nickname_note}"
@@ -1952,6 +2188,8 @@ def build_bot() -> MicroBot:
             await send_ephemeral(interaction, "Unexpected error.")
 
     @set_verified_role.error
+    @set_elder_role.error
+    @set_coleader_role.error
     @set_verification_channel.error
     @set_auto_verification.error
     @set_kick_threshold.error

@@ -19,6 +19,20 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertEqual(store.get_verified_role_id(), 123456789)
 
+    def test_clan_status_role_settings_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            self.assertIsNone(store.get_elder_role_id())
+            self.assertIsNone(store.get_coleader_role_id())
+
+            store.set_elder_role_id(111)
+            store.set_coleader_role_id(222)
+
+            self.assertEqual(store.get_elder_role_id(), 111)
+            self.assertEqual(store.get_coleader_role_id(), 222)
+
     def test_verification_channel_setting_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(str(Path(directory) / "microbot.sqlite3"))
@@ -72,6 +86,16 @@ class MicrobotStorageTests(unittest.TestCase):
             store.set_setting("verified_role_id", "not-a-number")
 
             self.assertIsNone(store.get_verified_role_id())
+
+    def test_invalid_clan_status_role_settings_return_none(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+            store.set_setting("elder_role_id", "not-a-number")
+            store.set_setting("coleader_role_id", "not-a-number")
+
+            self.assertIsNone(store.get_elder_role_id())
+            self.assertIsNone(store.get_coleader_role_id())
 
     def test_remove_link_by_discord_id_removes_link(self):
         with tempfile.TemporaryDirectory() as directory:
