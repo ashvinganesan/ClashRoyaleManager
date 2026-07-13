@@ -69,9 +69,9 @@ Leaders can change them with:
 
 Leaderboard eligibility requires at least 2 full completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 full completed wars, 14 days first-seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
 
-Suggested kick/demotion candidates must be below the active score threshold and also have either no full completed-war average yet or a rolling average below the kick threshold. The active score is current-war fame during battle periods and last-war fame during training periods. Members above the active score threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. First-seen is shown as context for leaders, not as an automatic excuse.
+Suggested kick/demotion candidates must be below the active score threshold and also have either no full completed-war average yet or a rolling average below the kick threshold. The active score is current-war fame during battle periods and last-war fame during training periods. Members above the active score threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. Short samples are handled conservatively: if a member has fewer than 3 full wars and at least one full war at or above the kick threshold, the bot does not auto-suggest kick/demotion yet.
 
-Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted.
+Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted. If the bot first discovers a member from a completed river-race log, that first observed race can count when the score is high enough to show real participation.
 
 ## Run
 

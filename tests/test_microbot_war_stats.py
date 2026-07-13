@@ -190,6 +190,104 @@ class MicrobotWarStatsTests(unittest.TestCase):
         self.assertIn("partial; not counted", player_history)
         self.assertIn("Kick/Demotion: **No**", player_recommendations)
 
+    def test_first_observed_high_score_counts_and_prevents_short_sample_kick(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        last_completed = now - dt.timedelta(hours=2)
+        previous_completed = last_completed - dt.timedelta(days=7)
+        first_seen = previous_completed.isoformat()
+
+        current_participants = [
+            {"tag": "#OUCH", "name": "OuchMyElbow", "fame": 0, "decksUsedToday": 0, "decksUsed": 0},
+            {"tag": "#LOW", "name": "ConsistentLow", "fame": 0, "decksUsedToday": 0, "decksUsed": 0},
+        ]
+        members_payload = {
+            "items": [
+                {"tag": "#OUCH", "name": "OuchMyElbow", "role": "member"},
+                {"tag": "#LOW", "name": "ConsistentLow", "role": "member"},
+            ]
+        }
+        race = {
+            "periodType": "training",
+            "periodIndex": 0,
+            "clan": {"name": "A Clan Reborn", "tag": "#CLAN", "participants": current_participants},
+        }
+        race_log = {
+            "items": [
+                {
+                    "createdDate": clash_time(last_completed),
+                    "standings": [
+                        {
+                            "clan": {
+                                "tag": "#CLAN",
+                                "participants": [
+                                    {"tag": "#OUCH", "name": "OuchMyElbow", "fame": 700},
+                                    {"tag": "#LOW", "name": "ConsistentLow", "fame": 700},
+                                ],
+                            }
+                        }
+                    ],
+                },
+                {
+                    "createdDate": clash_time(previous_completed),
+                    "standings": [
+                        {
+                            "clan": {
+                                "tag": "#CLAN",
+                                "participants": [
+                                    {"tag": "#OUCH", "name": "OuchMyElbow", "fame": 3050},
+                                    {"tag": "#LOW", "name": "ConsistentLow", "fame": 700},
+                                ],
+                            }
+                        }
+                    ],
+                },
+            ]
+        }
+        presence_map = {
+            "#OUCH": {
+                "first_seen_at": first_seen,
+                "first_seen_source": "river race log",
+                "last_seen_at": now.isoformat(),
+            },
+            "#LOW": {
+                "first_seen_at": first_seen,
+                "first_seen_source": "river race log",
+                "last_seen_at": now.isoformat(),
+            },
+        }
+
+        embed = build_enhanced_war_stats_embed(
+            race,
+            members_payload,
+            race_log,
+            presence_map,
+            2000,
+            2500,
+        )
+        kick_text = field_text(embed, "Suggested Kick/Demotion", "More Candidates")
+
+        self.assertNotIn("OuchMyElbow", kick_text)
+        self.assertIn("ConsistentLow", kick_text)
+
+        historical_stats, _ = collect_completed_war_stats(race_log, "#CLAN", now - dt.timedelta(days=35))
+        players_by_tag = war_player_index(members_payload, race, historical_stats)
+        player_embed = build_player_war_stats_embed(
+            players_by_tag["#OUCH"],
+            race,
+            members_payload,
+            race_log,
+            presence_map,
+            2000,
+            2500,
+        )
+        player_history = field_text(player_embed, "Rolling 35-Day Full-War History")
+        player_recommendations = field_text(player_embed, "Recommendations")
+
+        self.assertIn("Average: **1,875** over **2** full completed wars", player_history)
+        self.assertNotIn("partial; not counted", player_history)
+        self.assertIn("Kick/Demotion: **No**", player_recommendations)
+        self.assertIn("short history includes a 2,000+ full war", player_recommendations)
+
     def test_last_war_bottom_ranks_include_departed_players(self):
         now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
         last_completed = now - dt.timedelta(days=1)

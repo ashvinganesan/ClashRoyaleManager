@@ -33,6 +33,9 @@ LAST_WAR_BOTTOM_START_RANK = 41
 DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
 FULL_WAR_JOIN_CUTOFF_BEFORE_END = dt.timedelta(days=4)
+FIRST_OBSERVED_FULL_WAR_FAME_FLOOR = 2000
+MIN_KICK_DEMOTION_SAMPLE_WARS = 3
+RIVER_RACE_LOG_SOURCE = "river race log"
 ROLE_MARKERS = {
     "member": "🟫 Member",
     "elder": "🟩 Elder",
@@ -102,6 +105,17 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[dt.datetime]:
     try:
         return dt.datetime.fromisoformat(value)
     except ValueError:
+        return None
+
+
+def presence_value(presence: Optional[Any], key: str) -> Optional[str]:
+    """Read a field from a SQLite row or test dict."""
+    if presence is None:
+        return None
+
+    try:
+        return presence[key]
+    except (KeyError, IndexError):
         return None
 
 
@@ -416,7 +430,15 @@ def is_training_period(race: dict) -> bool:
     return str(race.get("periodType") or "").lower() == "training"
 
 
-def is_full_completed_war(completed_at: dt.datetime, first_seen_at: Optional[dt.datetime]) -> bool:
+def same_utc_day(first: dt.datetime, second: dt.datetime) -> bool:
+    """Return whether two timestamps fall on the same UTC day."""
+    return first.astimezone(dt.timezone.utc).date() == second.astimezone(dt.timezone.utc).date()
+
+
+def is_full_completed_war(completed_at: dt.datetime,
+                          first_seen_at: Optional[dt.datetime],
+                          first_seen_source: Optional[str] = None,
+                          fame: Optional[int] = None) -> bool:
     """Return whether a completed war should count for a member's average."""
     if first_seen_at is None:
         return True
@@ -425,21 +447,59 @@ def is_full_completed_war(completed_at: dt.datetime, first_seen_at: Optional[dt.
     # boundaries. War battles end near the log timestamp; battle day 1 starts
     # roughly four days earlier, so members seen by then had battle day 1
     # available.
-    return first_seen_at <= completed_at - FULL_WAR_JOIN_CUTOFF_BEFORE_END
+    if first_seen_at <= completed_at - FULL_WAR_JOIN_CUTOFF_BEFORE_END:
+        return True
+
+    # If the bot first saw a member from the river-race log itself, that
+    # timestamp means "observed in this completed race", not "joined today".
+    # A high first-observed score is strong evidence they had a real war week.
+    return (
+        first_seen_source == RIVER_RACE_LOG_SOURCE
+        and fame is not None
+        and fame >= FIRST_OBSERVED_FULL_WAR_FAME_FLOOR
+        and same_utc_day(first_seen_at, completed_at)
+    )
 
 
-def eligible_completed_entries(history: dict, first_seen_at: Optional[dt.datetime]) -> list[dict]:
+def eligible_completed_entries(history: dict,
+                               first_seen_at: Optional[dt.datetime],
+                               first_seen_source: Optional[str] = None) -> list[dict]:
     """Return completed war entries that should count for the member."""
     return [
         entry
         for entry in history.get("entries", [])
-        if is_full_completed_war(entry["date"], first_seen_at)
+        if is_full_completed_war(entry["date"], first_seen_at, first_seen_source, entry["fame"])
     ]
 
 
 def average_entry_fame(entries: list[dict]) -> Optional[float]:
     """Return average fame for completed war entries."""
     return (sum(entry["fame"] for entry in entries) / len(entries)) if entries else None
+
+
+def has_short_history_good_war(full_entries: list[dict], kick_threshold: int) -> bool:
+    """Return whether a short sample has at least one good full war."""
+    return (
+        0 < len(full_entries) < MIN_KICK_DEMOTION_SAMPLE_WARS
+        and any(entry["fame"] >= kick_threshold for entry in full_entries)
+    )
+
+
+def should_suggest_kick_demotion(active_fame: Optional[int],
+                                 average_fame: Optional[float],
+                                 full_entries: list[dict],
+                                 kick_threshold: int) -> bool:
+    """Return whether a player belongs on the kick/demotion suggestion list."""
+    if active_fame is None or active_fame >= kick_threshold:
+        return False
+
+    if average_fame is None:
+        return True
+
+    if average_fame >= kick_threshold:
+        return False
+
+    return not has_short_history_good_war(full_entries, kick_threshold)
 
 
 def completed_war_score(history: dict, completed_at: Optional[dt.datetime]) -> int:
@@ -457,15 +517,18 @@ def completed_war_score(history: dict, completed_at: Optional[dt.datetime]) -> i
 def active_score(current_fame: int,
                  history: dict,
                  active_completed_at: Optional[dt.datetime],
-                 first_seen_at: Optional[dt.datetime]) -> tuple[Optional[int], str]:
+                 first_seen_at: Optional[dt.datetime],
+                 first_seen_source: Optional[str] = None) -> tuple[Optional[int], str]:
     """Return the score to use for current report recommendations."""
     if active_completed_at is None:
         return current_fame, "current"
 
-    if not is_full_completed_war(active_completed_at, first_seen_at):
+    completed_score = completed_war_score(history, active_completed_at)
+
+    if not is_full_completed_war(active_completed_at, first_seen_at, first_seen_source, completed_score):
         return None, "last full war"
 
-    return completed_war_score(history, active_completed_at), "last war"
+    return completed_score, "last war"
 
 
 def estimate_current_race_start(race: dict, race_log: dict, now: dt.datetime) -> dt.datetime:
@@ -688,8 +751,9 @@ def last_war_bottom_lines(race_log: dict,
         status_text = "in clan" if in_current_roster else "not in clan anymore"
         history = historical_stats.get(player_tag, {})
         presence = presence_map.get(player_tag)
-        first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
-        full_entries = eligible_completed_entries(history, first_seen_at)
+        first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
+        first_seen_source = presence_value(presence, "first_seen_source")
+        full_entries = eligible_completed_entries(history, first_seen_at, first_seen_source)
         average_fame = average_entry_fame(full_entries)
         rows.append(
             f"{rank}. {role_text} {format_name(player_name)} - "
@@ -785,16 +849,21 @@ def build_player_war_stats_embed(target: dict,
     decks_total = int_value(participant.get("decksUsed"))
     history = historical_stats.get(player_tag, {})
     presence = presence_map.get(player_tag)
-    first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
-    last_seen_at = parse_iso_datetime(presence["last_seen_at"]) if presence else None
-    full_entries = sorted(eligible_completed_entries(history, first_seen_at), key=lambda entry: entry["date"], reverse=True)
+    first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
+    first_seen_source = presence_value(presence, "first_seen_source")
+    last_seen_at = parse_iso_datetime(presence_value(presence, "last_seen_at"))
+    full_entries = sorted(
+        eligible_completed_entries(history, first_seen_at, first_seen_source),
+        key=lambda entry: entry["date"],
+        reverse=True,
+    )
     entries = sorted(history.get("entries", []), key=lambda entry: entry["date"], reverse=True)
     race_count = len(full_entries)
     average_fame = average_entry_fame(full_entries)
     full_scores = [entry["fame"] for entry in full_entries]
     best_fame = max(full_scores) if full_scores else None
     low_fame = min(full_scores) if full_scores else None
-    active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at)
+    active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at, first_seen_source)
     active_title = "Training Period / Last War" if active_completed_at is not None else "Current War"
     fame_label = "Last war fame" if active_completed_at is not None else "Fame"
     decks_label = "training decks used" if is_training_period(race) else "decks used"
@@ -802,7 +871,8 @@ def build_player_war_stats_embed(target: dict,
     tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
     low_active = active_fame is not None and active_fame < kick_threshold
     low_or_missing_average = average_fame is None or average_fame < kick_threshold
-    should_kick_demote = low_active and low_or_missing_average
+    short_history_good_war = has_short_history_good_war(full_entries, kick_threshold)
+    should_kick_demote = should_suggest_kick_demotion(active_fame, average_fame, full_entries, kick_threshold)
     should_promote = (
         average_fame is not None
         and average_fame >= promotion_threshold
@@ -837,7 +907,7 @@ def build_player_war_stats_embed(target: dict,
     recent_lines = [
         (
             f"{short_date(entry['date'])}: {entry['fame']:,}"
-            if is_full_completed_war(entry["date"], first_seen_at)
+            if is_full_completed_war(entry["date"], first_seen_at, first_seen_source, entry["fame"])
             else f"{short_date(entry['date'])}: {entry['fame']:,} (partial; not counted)"
         )
         for entry in entries[:5]
@@ -877,6 +947,8 @@ def build_player_war_stats_embed(target: dict,
         kick_detail = f"{score_label} is at or above threshold"
     elif average_fame is not None and average_fame >= kick_threshold:
         kick_detail = "rolling average is at or above threshold"
+    elif short_history_good_war:
+        kick_detail = f"short history includes a {kick_threshold:,}+ full war"
     else:
         kick_detail = "not enough completed-war history"
 
@@ -993,15 +1065,14 @@ def build_enhanced_war_stats_embed(race: dict,
         current_fame = int_value(participant.get("fame"))
         history = historical_stats.get(player_tag, {})
         presence = presence_map.get(player_tag)
-        first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
-        full_entries = eligible_completed_entries(history, first_seen_at)
+        first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
+        first_seen_source = presence_value(presence, "first_seen_source")
+        full_entries = eligible_completed_entries(history, first_seen_at, first_seen_source)
         race_count = len(full_entries)
         average_fame = average_entry_fame(full_entries)
-        active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at)
+        active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at, first_seen_source)
         has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
-        low_active = active_fame is not None and active_fame < kick_threshold
-        low_or_missing_average = average_fame is None or average_fame < kick_threshold
 
         if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
             rolling_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
@@ -1015,7 +1086,7 @@ def build_enhanced_war_stats_embed(race: dict,
                 and can_be_promoted(member)):
             promotion_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
 
-        if low_active and low_or_missing_average:
+        if should_suggest_kick_demotion(active_fame, average_fame, full_entries, kick_threshold):
             if average_fame is not None:
                 reason = f"{active_row_label} and rolling average below threshold"
             elif tracked_after_race_start:
