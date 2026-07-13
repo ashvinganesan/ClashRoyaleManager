@@ -56,6 +56,14 @@ def format_name(value: Any) -> str:
     return discord.utils.escape_markdown(str(value or "Unknown"))
 
 
+async def send_ephemeral(interaction: discord.Interaction, message: str):
+    """Send an ephemeral command response or followup."""
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
 def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
     """Build a current river race status embed."""
     clan = race.get("clan") or {}
@@ -301,19 +309,21 @@ def build_bot() -> MicroBot:
             await interaction.response.send_message("That player tag is already linked.", ephemeral=True)
             return
 
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
         try:
             player = clash.get_player(normalized_tag)
         except ClashNotFound:
-            await interaction.response.send_message("That player tag does not exist.", ephemeral=True)
+            await interaction.followup.send("That player tag does not exist.", ephemeral=True)
             return
         except ClashApiError:
-            await interaction.response.send_message("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
 
         clan_tag, clan_name = player_clan(player)
 
         if settings.clan_tag and clan_tag != settings.clan_tag:
-            await interaction.response.send_message("That player is not currently in the configured clan.", ephemeral=True)
+            await interaction.followup.send("That player is not currently in the configured clan.", ephemeral=True)
             return
 
         code = make_code()
@@ -335,7 +345,7 @@ def build_bot() -> MicroBot:
             message += f"\nClan: {clan_name} `{clan_tag}`"
 
         message += f"\nExpires: `{expires_at}`"
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.followup.send(message, ephemeral=True)
 
     @bot.tree.command(name="war_stats", description="Post current Clan War stats for the configured clan.")
     async def war_stats(interaction: discord.Interaction):
@@ -362,17 +372,18 @@ def build_bot() -> MicroBot:
     @app_commands.describe(member="Discord member who posted the code")
     @app_commands.describe(player_tag="Player tag being verified")
     async def confirm_verification(interaction: discord.Interaction, member: discord.Member, player_tag: str):
+        await interaction.response.defer(thinking=True, ephemeral=True)
         normalized_tag = normalize_tag(player_tag)
         challenge = store.get_pending_challenge(member.id, normalized_tag)
 
         if challenge is None:
-            await interaction.response.send_message("No active verification challenge found.", ephemeral=True)
+            await interaction.followup.send("No active verification challenge found.", ephemeral=True)
             return
 
         try:
             player = clash.get_player(normalized_tag)
         except ClashApiError:
-            await interaction.response.send_message("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
 
         clan_tag, clan_name = player_clan(player)
@@ -393,24 +404,24 @@ def build_bot() -> MicroBot:
         if role_note:
             message += f"\n{role_note}"
 
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.followup.send(message, ephemeral=True)
 
     @confirm_verification.error
     async def confirm_verification_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
-            await interaction.response.send_message("Only server admins can confirm verifications.", ephemeral=True)
+            await send_ephemeral(interaction, "Only server admins can confirm verifications.")
         else:
             LOG.exception("Unexpected command error", exc_info=error)
-            await interaction.response.send_message("Unexpected error.", ephemeral=True)
+            await send_ephemeral(interaction, "Unexpected error.")
 
     @set_verified_role.error
     @verification_config.error
     async def verification_admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
-            await interaction.response.send_message("Only server admins can manage verification settings.", ephemeral=True)
+            await send_ephemeral(interaction, "Only server admins can manage verification settings.")
         else:
             LOG.exception("Unexpected command error", exc_info=error)
-            await interaction.response.send_message("Unexpected error.", ephemeral=True)
+            await send_ephemeral(interaction, "Unexpected error.")
 
     return bot
 
