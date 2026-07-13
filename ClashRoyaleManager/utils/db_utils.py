@@ -38,6 +38,7 @@ from utils.custom_types import (
 )
 from utils.exceptions import GeneralAPIError, ResourceNotFound
 from utils.outside_battles_queue import UNSENT_WARNINGS
+from utils.verification_utils import VERIFICATION_TTL_MINUTES
 
 EXPORT_PATH = "export_data"
 CARD_IMAGE_PATH = "card_images"
@@ -802,6 +803,56 @@ def get_discord_id_from_player_tag(tag: str) -> Optional[int]:
         return None
 
     return query_result["discord_id"]
+
+
+def create_verification_challenge(discord_id: int,
+                                  discord_name: str,
+                                  player_tag: str,
+                                  player_name: str,
+                                  challenge_code: str,
+                                  ttl_minutes: int=VERIFICATION_TTL_MINUTES) -> datetime.datetime:
+    """Create a pending verification challenge for a Discord user and player tag."""
+    database, cursor = get_database_connection()
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=ttl_minutes)
+
+    cursor.execute("UPDATE verification_challenges\
+                    SET status = 'cancelled'\
+                    WHERE status = 'pending' AND (discord_id = %s OR player_tag = %s)",
+                   (discord_id, player_tag))
+    cursor.execute("INSERT INTO verification_challenges\
+                    (discord_id, discord_name, player_tag, player_name, challenge_code, expires_at)\
+                    VALUES (%s, %s, %s, %s, %s, %s)",
+                   (discord_id, discord_name, player_tag, player_name, challenge_code, expires_at))
+    database.commit()
+    database.close()
+    return expires_at
+
+
+def get_pending_verification(discord_id: int, player_tag: str) -> Optional[dict]:
+    """Get an unexpired pending verification challenge."""
+    database, cursor = get_database_connection()
+    cursor.execute("UPDATE verification_challenges\
+                    SET status = 'expired'\
+                    WHERE status = 'pending' AND expires_at < UTC_TIMESTAMP()")
+    cursor.execute("SELECT * FROM verification_challenges\
+                    WHERE discord_id = %s AND player_tag = %s AND status = 'pending' AND expires_at >= UTC_TIMESTAMP()\
+                    ORDER BY created_at DESC LIMIT 1",
+                   (discord_id, player_tag))
+    challenge = cursor.fetchone()
+    database.commit()
+    database.close()
+    return challenge
+
+
+def approve_verification(challenge_id: int, reviewer_discord_id: int):
+    """Mark a verification challenge as approved."""
+    database, cursor = get_database_connection()
+    cursor.execute("UPDATE verification_challenges\
+                    SET status = 'approved', reviewed_by_discord_id = %s, reviewed_at = UTC_TIMESTAMP()\
+                    WHERE id = %s AND status = 'pending'",
+                   (reviewer_discord_id, challenge_id))
+    database.commit()
+    database.close()
 
 
 ############################################################################

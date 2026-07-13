@@ -450,6 +450,33 @@ CREATE TABLE `users` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `verification_challenges`
+--
+
+DROP TABLE IF EXISTS `verification_challenges`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `verification_challenges` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `discord_id` bigint unsigned NOT NULL,
+  `discord_name` varchar(50) NOT NULL,
+  `player_tag` varchar(16) NOT NULL,
+  `player_name` varchar(50) NOT NULL,
+  `challenge_code` varchar(32) NOT NULL,
+  `status` enum('pending','approved','cancelled','expired') NOT NULL DEFAULT 'pending',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `expires_at` timestamp NOT NULL,
+  `reviewed_by_discord_id` bigint unsigned DEFAULT NULL,
+  `reviewed_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `discord_id` (`discord_id`),
+  KEY `player_tag` (`player_tag`),
+  KEY `status` (`status`),
+  KEY `expires_at` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `variables`
 --
 

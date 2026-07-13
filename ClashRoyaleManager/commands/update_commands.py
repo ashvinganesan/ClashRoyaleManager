@@ -6,6 +6,7 @@ from discord import app_commands
 import utils.clash_utils as clash_utils
 import utils.db_utils as db_utils
 import utils.discord_utils as discord_utils
+import utils.verification_utils as verification_utils
 from log.logger import LOG
 from utils.custom_types import ReminderTime, SpecialRole
 from utils.exceptions import GeneralAPIError, ResourceNotFound
@@ -65,6 +66,116 @@ async def register(interaction: discord.Interaction, tag: str):
             embed = discord.Embed(title="The tag you entered does not exist.",
                                   description="Please enter your unique player tag.",
                                   color=discord.Color.red())
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    LOG.command_end()
+
+
+@app_commands.command()
+@app_commands.checks.cooldown(3, 10.0)
+@app_commands.describe(tag="Your player tag")
+async def verify(interaction: discord.Interaction, tag: str):
+    """Create a clan-chat verification code for your Clash Royale account."""
+    LOG.command_start(interaction, tag=tag)
+    processed_tag = clash_utils.process_clash_royale_tag(tag)
+
+    if processed_tag is None:
+        embed = discord.Embed(title="You entered an invalid Supercell tag. Please try again.", color=discord.Color.red())
+    elif db_utils.get_user_in_database(interaction.user.id):
+        embed = discord.Embed(title="You are already registered.", color=discord.Color.red())
+    elif db_utils.get_discord_id_from_player_tag(processed_tag) is not None:
+        embed = discord.Embed(title="That player tag is already registered to someone on this server.",
+                              color=discord.Color.red())
+    else:
+        try:
+            clash_data = clash_utils.get_clash_royale_user_data(processed_tag)
+            primary_clan_tags = {clan["tag"] for clan in db_utils.get_primary_clans()}
+
+            if clash_data["clan_tag"] not in primary_clan_tags:
+                embed = discord.Embed(title="That player is not currently in a tracked clan.",
+                                      description=("Join the clan first, then run `/verify` again. "
+                                                   "If this is a mistake, ask leadership to check the configured clan tag."),
+                                      color=discord.Color.red())
+            else:
+                challenge_code = verification_utils.generate_verification_code()
+                expires_at = db_utils.create_verification_challenge(
+                    interaction.user.id,
+                    discord_utils.full_discord_name(interaction.user),
+                    clash_data["tag"],
+                    clash_data["name"],
+                    challenge_code,
+                )
+                embed = discord.Embed(title="Verification started",
+                                      description=("Post this exact code in Clash Royale clan chat, then ask a leader to run "
+                                                   "`/confirm_verification` after they see it."),
+                                      color=discord.Color.green())
+                embed.add_field(name="Player", value=f"{clash_data['name']} `{clash_data['tag']}`", inline=False)
+                embed.add_field(name="Clan chat code", value=f"`{challenge_code}`", inline=False)
+                embed.add_field(name="Expires", value=f"{expires_at.strftime('%Y-%m-%d %H:%M UTC')}", inline=False)
+        except GeneralAPIError:
+            embed = discord.Embed(title="The Clash Royale API is currently inaccessible.",
+                                  description="Please try again later.",
+                                  color=discord.Color.red())
+        except ResourceNotFound:
+            embed = discord.Embed(title="The tag you entered does not exist.",
+                                  description="Please enter your unique player tag.",
+                                  color=discord.Color.red())
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    LOG.command_end()
+
+
+@app_commands.command()
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.describe(member="Discord member who posted their verification code")
+@app_commands.describe(tag="Player tag the member is verifying")
+async def confirm_verification(interaction: discord.Interaction, member: discord.Member, tag: str):
+    """Confirm a pending verification after seeing its code in Clash Royale clan chat."""
+    LOG.command_start(interaction, member=member, tag=tag)
+    processed_tag = clash_utils.process_clash_royale_tag(tag)
+
+    if processed_tag is None:
+        embed = discord.Embed(title="You entered an invalid Supercell tag. Please try again.", color=discord.Color.red())
+    else:
+        challenge = db_utils.get_pending_verification(member.id, processed_tag)
+
+        if challenge is None:
+            embed = discord.Embed(title="No pending verification was found for that member and tag.",
+                                  description="Ask the member to run `/verify` again if the code expired.",
+                                  color=discord.Color.red())
+        elif db_utils.get_discord_id_from_player_tag(processed_tag) not in {None, member.id}:
+            embed = discord.Embed(title="That player tag is already registered to someone else.",
+                                  color=discord.Color.red())
+        else:
+            try:
+                clash_data = clash_utils.get_clash_royale_user_data(processed_tag)
+                db_utils.insert_new_user(clash_data, member)
+                db_utils.approve_verification(challenge["id"], interaction.user.id)
+
+                try:
+                    await member.edit(nick=clash_data["name"])
+                except discord.errors.Forbidden:
+                    pass
+
+                try:
+                    await member.remove_roles(ROLE[SpecialRole.New])
+                except discord.errors.Forbidden:
+                    pass
+
+                await discord_utils.assign_roles(member)
+                new_member_embed = discord_utils.create_card_levels_embed(clash_data)
+                await CHANNEL[SpecialChannel.NewMemberInfo].send(embed=new_member_embed)
+
+                embed = discord.Embed(title="Verification confirmed",
+                                      description=f"{member.mention} is registered as {clash_data['name']} `{clash_data['tag']}`.",
+                                      color=discord.Color.green())
+            except GeneralAPIError:
+                embed = discord.Embed(title="The Clash Royale API is currently inaccessible.",
+                                      description="Please try again later.",
+                                      color=discord.Color.red())
+            except ResourceNotFound:
+                embed = discord.Embed(title="The tag no longer exists.",
+                                      color=discord.Color.red())
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
     LOG.command_end()
@@ -250,6 +361,8 @@ async def set_reminder_time(interaction: discord.Interaction, reminder_time: app
 
 
 @register.error
+@verify.error
+@confirm_verification.error
 @update.error
 @update_member.error
 @update_all_members.error
@@ -266,6 +379,9 @@ async def update_commands_error_handler(interaction: discord.Interaction, error:
     elif isinstance(error, app_commands.CommandOnCooldown):
         embed = discord.Embed(title="You've used this command too many times and it is currently on cooldown.",
                               color=discord.Color.red())
+    elif isinstance(error, app_commands.CheckFailure):
+        embed = discord.Embed(title="You do not have permission to use this command.",
+                              color=discord.Color.red())
     else:
         embed = discord.Embed(title="An unexpected error has occurred.", color=discord.Color.red())
         LOG.exception(error)
@@ -275,6 +391,8 @@ async def update_commands_error_handler(interaction: discord.Interaction, error:
 
 UPDATE_COMMANDS = [
     register,
+    verify,
+    confirm_verification,
     update,
     update_member,
     update_all_members,
