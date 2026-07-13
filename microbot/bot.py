@@ -1,5 +1,6 @@
 """Tiny Discord bot entry point."""
 
+import datetime as dt
 import logging
 import secrets
 import string
@@ -32,6 +33,138 @@ def player_clan(player: dict) -> tuple[Optional[str], Optional[str]]:
     """Extract clan tag/name from a player payload."""
     clan = player.get("clan") or {}
     return clan.get("tag"), clan.get("name")
+
+
+def int_value(value: Any) -> int:
+    """Return an integer for numeric API values."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def clip_text(value: str, limit: int = 1024) -> str:
+    """Keep embed field text within Discord's limit."""
+    if len(value) <= limit:
+        return value
+
+    return value[: limit - 3].rstrip() + "..."
+
+
+def format_name(value: Any) -> str:
+    """Escape player/clan names for Discord embeds."""
+    return discord.utils.escape_markdown(str(value or "Unknown"))
+
+
+def build_war_stats_embed(race: dict, members_payload: dict) -> discord.Embed:
+    """Build a current river race status embed."""
+    clan = race.get("clan") or {}
+    race_clans = race.get("clans") or []
+    participants = clan.get("participants") or []
+    members = members_payload.get("items") or []
+    participants_by_tag = {participant.get("tag"): participant for participant in participants}
+
+    fame = sum(int_value(participant.get("fame")) for participant in participants)
+    decks_today = sum(int_value(participant.get("decksUsedToday")) for participant in participants)
+    decks_total = sum(int_value(participant.get("decksUsed")) for participant in participants)
+    member_count = len(members)
+    roster_capacity = member_count * 4
+
+    remaining_roster_decks = 0
+    no_decks_today = 0
+    needs_decks = []
+
+    for member in members:
+        participant = participants_by_tag.get(member.get("tag"), {})
+        member_decks_today = min(4, int_value(participant.get("decksUsedToday")))
+
+        if member_decks_today == 0:
+            no_decks_today += 1
+
+        if member_decks_today < 4:
+            remaining_roster_decks += 4 - member_decks_today
+            needs_decks.append((member_decks_today, member.get("name"), member.get("tag")))
+
+    title = f"{clan.get('name', 'Clan')} War Stats"
+    embed = discord.Embed(
+        title=title,
+        description=f"Current river race for `{clan.get('tag', 'unknown')}`",
+        color=discord.Color.blue(),
+        timestamp=dt.datetime.now(dt.timezone.utc),
+    )
+
+    period_type = race.get("periodType", "unknown")
+    period_index = int_value(race.get("periodIndex")) + 1
+    embed.add_field(
+        name="Summary",
+        value=(
+            f"Fame: **{fame:,}**\n"
+            f"Decks today: **{decks_today}/200**\n"
+            f"Current roster remaining: **{remaining_roster_decks}/{roster_capacity}**\n"
+            f"Decks total this race: **{decks_total}**\n"
+            f"Members with 0 decks today: **{no_decks_today}**\n"
+            f"Period: **{format_name(period_type)} {period_index}**"
+        ),
+        inline=False,
+    )
+
+    top_participants = sorted(
+        participants,
+        key=lambda participant: (
+            int_value(participant.get("fame")),
+            int_value(participant.get("decksUsed")),
+            int_value(participant.get("decksUsedToday")),
+        ),
+        reverse=True,
+    )[:10]
+    top_lines = []
+
+    for index, participant in enumerate(top_participants, 1):
+        top_lines.append(
+            f"{index}. {format_name(participant.get('name'))} - "
+            f"{int_value(participant.get('fame')):,} fame, "
+            f"{int_value(participant.get('decksUsedToday'))}/4 today"
+        )
+
+    embed.add_field(
+        name="Top Contributors",
+        value=clip_text("\n".join(top_lines) or "No war battles logged yet."),
+        inline=False,
+    )
+
+    needs_decks.sort(key=lambda item: (item[0], str(item[1]).lower()))
+    needs_decks_lines = [
+        f"{format_name(name)} - {used}/4"
+        for used, name, _ in needs_decks[:12]
+    ]
+
+    if len(needs_decks) > 12:
+        needs_decks_lines.append(f"...and {len(needs_decks) - 12} more")
+
+    embed.add_field(
+        name="Still Has Decks Today",
+        value=clip_text("\n".join(needs_decks_lines) or "Everyone on the current roster is at 4/4."),
+        inline=False,
+    )
+
+    standings = sorted(race_clans, key=lambda item: int_value(item.get("fame")), reverse=True)
+    standings_lines = []
+
+    for index, race_clan in enumerate(standings, 1):
+        clan_participants = race_clan.get("participants") or []
+        clan_decks_today = sum(int_value(participant.get("decksUsedToday")) for participant in clan_participants)
+        standings_lines.append(
+            f"{index}. {format_name(race_clan.get('name'))} - "
+            f"{int_value(race_clan.get('fame')):,} fame, {clan_decks_today} decks today"
+        )
+
+    embed.add_field(
+        name="Race Standings",
+        value=clip_text("\n".join(standings_lines) or "No race standings available."),
+        inline=False,
+    )
+    embed.set_footer(text="Data from the Clash Royale API")
+    return embed
 
 
 class MicroBot(discord.Client):
@@ -68,9 +201,75 @@ def build_bot() -> MicroBot:
     clash = ClashClient(settings.clash_api_token)
     bot = MicroBot(settings, store, clash)
 
+    def current_verified_role_id() -> Optional[int]:
+        """Return the configured verified role, preferring the database setting."""
+        return store.get_verified_role_id() or settings.verified_role_id
+
+    async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
+        """Assign the configured verified role and return a user-facing note."""
+        role_id = current_verified_role_id()
+
+        if role_id is None:
+            return "No verified role is configured yet. Run `/set_verified_role` when the role is ready."
+
+        if interaction.guild is None:
+            return "The account is verified, but roles can only be assigned inside the server."
+
+        role = interaction.guild.get_role(role_id)
+
+        if role is None:
+            return "The account is verified, but the configured verified role was not found."
+
+        try:
+            await member.add_roles(role, reason="Clash Royale clan verification")
+        except discord.Forbidden:
+            return "The account is verified, but I do not have permission to assign the verified role."
+        except discord.HTTPException:
+            return "The account is verified, but Discord rejected the role assignment."
+
+        return f"Assigned {role.mention}."
+
     @bot.tree.command(name="bot_health", description="Show whether the lightweight bot is online.")
     async def bot_health(interaction: discord.Interaction):
         await interaction.response.send_message("Online. SQLite store is initialized.", ephemeral=True)
+
+    @bot.tree.command(name="set_verified_role", description="Set the role assigned after Clash Royale verification.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(role="Role to assign after a member is verified")
+    async def set_verified_role(interaction: discord.Interaction, role: discord.Role):
+        if role.is_default():
+            await interaction.response.send_message("Choose a normal role, not @everyone.", ephemeral=True)
+            return
+
+        notes = []
+        bot_member = interaction.guild.me if interaction.guild else None
+
+        if bot_member and bot_member.top_role <= role:
+            notes.append("Move the bot's role above this role in Server Settings > Roles so it can assign it.")
+
+        if not interaction.app_permissions.manage_roles:
+            notes.append("The bot also needs the Manage Roles permission.")
+
+        store.set_verified_role_id(role.id)
+        message = f"Verified role set to {role.mention}."
+
+        if notes:
+            message += "\n" + "\n".join(notes)
+
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @bot.tree.command(name="verification_config", description="Show verification role configuration.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def verification_config(interaction: discord.Interaction):
+        role_id = current_verified_role_id()
+
+        if role_id is None:
+            await interaction.response.send_message("No verified role is configured.", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(role_id) if interaction.guild else None
+        role_label = role.mention if role else f"`{role_id}` (not found)"
+        await interaction.response.send_message(f"Verified role: {role_label}", ephemeral=True)
 
     @bot.tree.command(name="me", description="Show your linked Clash Royale account.")
     async def me(interaction: discord.Interaction):
@@ -138,8 +337,28 @@ def build_bot() -> MicroBot:
         message += f"\nExpires: `{expires_at}`"
         await interaction.response.send_message(message, ephemeral=True)
 
+    @bot.tree.command(name="war_stats", description="Post current Clan War stats for the configured clan.")
+    async def war_stats(interaction: discord.Interaction):
+        if not settings.clan_tag:
+            await interaction.response.send_message("No clan tag is configured for this bot.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            race = clash.get_current_river_race(settings.clan_tag)
+            members = clash.get_clan_members(settings.clan_tag)
+        except ClashNotFound:
+            await interaction.followup.send("The configured clan tag was not found.", ephemeral=True)
+            return
+        except ClashApiError:
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            return
+
+        await interaction.followup.send(embed=build_war_stats_embed(race, members))
+
     @bot.tree.command(name="confirm_verification", description="Leader confirmation after seeing a code in clan chat.")
-    @app_commands.checks.has_permissions(manage_roles=True)
+    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(member="Discord member who posted the code")
     @app_commands.describe(player_tag="Player tag being verified")
     async def confirm_verification(interaction: discord.Interaction, member: discord.Member, player_tag: str):
@@ -167,22 +386,28 @@ def build_bot() -> MicroBot:
             clan_tag,
             clan_name,
         )
+        role_note = await add_verified_role(interaction, member)
 
-        if settings.verified_role_id:
-            role = interaction.guild.get_role(settings.verified_role_id) if interaction.guild else None
+        message = f"Verified {member.mention} as {player['name']} `{player['tag']}`."
 
-            if role:
-                await member.add_roles(role)
+        if role_note:
+            message += f"\n{role_note}"
 
-        await interaction.response.send_message(
-            f"Verified {member.mention} as {player['name']} `{player['tag']}`.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(message, ephemeral=True)
 
     @confirm_verification.error
     async def confirm_verification_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
-            await interaction.response.send_message("You do not have permission to confirm verifications.", ephemeral=True)
+            await interaction.response.send_message("Only server admins can confirm verifications.", ephemeral=True)
+        else:
+            LOG.exception("Unexpected command error", exc_info=error)
+            await interaction.response.send_message("Unexpected error.", ephemeral=True)
+
+    @set_verified_role.error
+    @verification_config.error
+    async def verification_admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CheckFailure):
+            await interaction.response.send_message("Only server admins can manage verification settings.", ephemeral=True)
         else:
             LOG.exception("Unexpected command error", exc_info=error)
             await interaction.response.send_message("Unexpected error.", ephemeral=True)

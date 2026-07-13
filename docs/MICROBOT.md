@@ -14,9 +14,23 @@ It is intentionally separate from the full historical manager while deployment i
 ## Commands
 
 - `/verify <player_tag>` creates a short code for the member to post in Clash Royale clan chat.
-- `/confirm_verification <member> <player_tag>` lets a leader approve the link after seeing the code.
+- `/confirm_verification <member> <player_tag>` lets a Discord admin approve the link after seeing the code.
+- `/set_verified_role <role>` sets the role assigned after successful verification.
+- `/verification_config` shows the current verification role setting.
+- `/war_stats` posts the current Clan War/River Race snapshot for the configured clan.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
+
+## Discord Verification Setup
+
+1. Create a `Verified` role in Discord.
+2. Move the bot's role above `Verified` in Server Settings > Roles.
+3. Make sure the bot has `Manage Roles`.
+4. Run `/set_verified_role @Verified`.
+5. Leave one verification channel visible to `@everyone`.
+6. Hide the rest of the server from `@everyone`, then allow `Verified` to view and send messages in the normal categories/channels.
+
+Only users with Discord administrator permission can run `/confirm_verification`, `/set_verified_role`, and `/verification_config`.
 
 ## Run
 

@@ -56,3 +56,15 @@ class ClashClient:
         normalized_tag = normalize_tag(tag)
         encoded_tag = urllib.parse.quote(normalized_tag, safe="")
         return self._get(f"/clans/{encoded_tag}")
+
+    def get_clan_members(self, tag: str) -> Dict[str, Any]:
+        """Fetch members for a clan."""
+        normalized_tag = normalize_tag(tag)
+        encoded_tag = urllib.parse.quote(normalized_tag, safe="")
+        return self._get(f"/clans/{encoded_tag}/members")
+
+    def get_current_river_race(self, tag: str) -> Dict[str, Any]:
+        """Fetch the current river race for a clan."""
+        normalized_tag = normalize_tag(tag)
+        encoded_tag = urllib.parse.quote(normalized_tag, safe="")
+        return self._get(f"/clans/{encoded_tag}/currentriverrace")

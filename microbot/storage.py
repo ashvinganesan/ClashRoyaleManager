@@ -66,8 +66,53 @@ class Store:
                     verified_at TEXT NOT NULL,
                     verified_by_discord_id INTEGER
                 );
+
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
+
+    def set_setting(self, key: str, value: str):
+        """Persist a bot setting."""
+        now = iso(utc_now())
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO bot_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, now),
+            )
+
+    def get_setting(self, key: str) -> Optional[str]:
+        """Read a bot setting."""
+        with self.connect() as connection:
+            row = connection.execute("SELECT value FROM bot_settings WHERE key = ?", (key,)).fetchone()
+
+        return None if row is None else row["value"]
+
+    def set_verified_role_id(self, role_id: int):
+        """Persist the Discord role id assigned after verification."""
+        self.set_setting("verified_role_id", str(role_id))
+
+    def get_verified_role_id(self) -> Optional[int]:
+        """Return the configured Discord verification role id."""
+        value = self.get_setting("verified_role_id")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
     def create_challenge(self,
                          discord_id: int,
