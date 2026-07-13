@@ -1,5 +1,22 @@
 __pycache__/
 .vscode/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+secrets.env
+secrets/
+*.pem
+*.key
+*.pub
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+ssh-key-*
+oracle-ssh-*
+
 backups/
 export_data/
 kick_images/

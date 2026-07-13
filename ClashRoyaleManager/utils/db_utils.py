@@ -14,12 +14,7 @@ from xlsxwriter.worksheet import Worksheet
 
 import utils.clash_utils as clash_utils
 import utils.discord_utils as discord_utils
-from config.credentials import (
-    IP,
-    USERNAME,
-    PASSWORD,
-    DATABASE_NAME
-)
+from config.settings import get_database_config
 from log.logger import LOG, log_message
 from utils.custom_types import (
     AutomatedRoutine,
@@ -53,7 +48,15 @@ def get_database_connection() -> Tuple[pymysql.Connection, DictCursor]:
     Returns:
         Database connection and cursor.
     """
-    database = pymysql.connect(host=IP, user=USERNAME, password=PASSWORD, database=DATABASE_NAME, charset='utf8mb4')
+    config = get_database_config()
+    database = pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        password=config.password,
+        database=config.database,
+        charset='utf8mb4',
+    )
     cursor = database.cursor(pymysql.cursors.DictCursor)
     return (database, cursor)
 

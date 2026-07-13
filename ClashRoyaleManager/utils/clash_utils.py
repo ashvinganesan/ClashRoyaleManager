@@ -6,7 +6,7 @@ import requests
 from typing import Dict, List, Tuple, Union
 
 import utils.db_utils as db_utils
-from config.credentials import CLASH_API_KEY
+from config.settings import get_clash_api_token
 from log.logger import LOG, log_message
 from utils.custom_types import (
     Battles,
@@ -25,6 +25,11 @@ from utils.custom_types import (
     RiverRaceStatus
 )
 from utils.exceptions import GeneralAPIError, ResourceNotFound
+
+
+def _api_headers() -> Dict[str, str]:
+    """Return Clash Royale API request headers."""
+    return {"Accept": "application/json", "authorization": f"Bearer {get_clash_api_token()}"}
 
 def process_clash_royale_tag(input: str) -> Union[str, None]:
     """Take a user's input and validate that it's a valid Supercell tag.
@@ -129,7 +134,7 @@ def get_total_cards() -> int:
     if get_total_cards.last_check_time is None or (now - get_total_cards.last_check_time).days > 0:
         LOG.info("Getting total cards available in game")
         req = requests.get(url="https://api.clashroyale.com/v1/cards",
-                           headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code == 200:
             get_total_cards.cached_total = len(req.json()["items"])
@@ -153,7 +158,7 @@ def get_all_cards() -> List[Card]:
     """
     LOG.info("Getting a list of all cards available in the game.")
     req = requests.get(url="https://api.clashroyale.com/v1/cards",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -191,7 +196,7 @@ def get_clash_royale_user_data(tag: str) -> ClashData:
     """
     LOG.info(f"Getting Clash Royale data of user {tag}")
     req = requests.get(url=f"https://api.clashroyale.com/v1/players/%23{tag[1:]}",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -268,7 +273,7 @@ def get_clan_name(tag: str) -> str:
     """
     LOG.info(f"Getting name of clan {tag}")
     req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -296,7 +301,7 @@ def get_current_river_race_info(tag: str) -> RiverRaceInfo:
     """
     LOG.info(f"Getting current river race info for clan {tag}")
     req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/currentriverrace",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -308,7 +313,7 @@ def get_current_river_race_info(tag: str) -> RiverRaceInfo:
     race_info = req.json()
 
     req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/riverracelog?limit=1",
-                           headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -352,7 +357,7 @@ def get_clans_in_race(tag: str, post_race: bool) -> Dict[str, RiverRaceClan]:
 
     if post_race:
         req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/riverracelog?limit=1",
-                           headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code != 200:
             LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -365,7 +370,7 @@ def get_clans_in_race(tag: str, post_race: bool) -> Dict[str, RiverRaceClan]:
         clans = [clan["clan"] for clan in json_obj["items"][0]["standings"]]
     else:
         req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/currentriverrace",
-                           headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code != 200:
             LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -432,7 +437,7 @@ def get_active_members_in_clan(tag: str, force: bool=False) -> Dict[str, ClashDa
             or force):
         LOG.info(f"Getting active members of clan {tag}")
         req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/members",
-                            headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code != 200:
             LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -499,7 +504,7 @@ def get_river_race_participants(tag: str, force: bool=False) -> List[Participant
             or force):
         LOG.info(f"Getting river race participants in clan {tag}")
         req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/currentriverrace",
-                        headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code != 200:
             LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -558,7 +563,7 @@ def get_prior_river_race_participants(tag: str, force: bool=True) -> List[Partic
             or force):
         LOG.info(f"Getting participants from most recent river race of clan {tag}")
         req = requests.get(url=f"https://api.clashroyale.com/v1/clans/%23{tag[1:]}/riverracelog?limit=1",
-                        headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                           headers=_api_headers())
 
         if req.status_code != 200:
             LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -898,7 +903,7 @@ def get_battle_day_stats(player_tag: str,
     """
     LOG.info(log_message("Getting battle log of user", player_tag=player_tag, clan_tag=clan_tag, last_check=last_check))
     req = requests.get(url=f"https://api.clashroyale.com/v1/players/%23{player_tag[1:]}/battlelog",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))
@@ -992,7 +997,7 @@ def battled_for_other_clan(player_tag: str, clan_tag: str, time: datetime.dateti
     LOG.info(log_message("Checking for previous war participation", player_tag=player_tag, clan_tag=clan_tag, time=time))
 
     req = requests.get(url=f"https://api.clashroyale.com/v1/players/%23{player_tag[1:]}/battlelog",
-                       headers={"Accept": "application/json", "authorization": f"Bearer {CLASH_API_KEY}"})
+                       headers=_api_headers())
 
     if req.status_code != 200:
         LOG.warning(log_message(msg="Bad request", status_code=req.status_code))

@@ -15,7 +15,7 @@ from commands.stat_commands import STAT_COMMANDS
 from commands.status_reports import STATUS_REPORT_COMMANDS
 from commands.strike_commands import STRIKE_COMMANDS
 from commands.update_commands import UPDATE_COMMANDS
-from config.credentials import BOT_TOKEN
+from config.settings import get_discord_bot_token, get_discord_guild_id
 from log.logger import LOG
 from utils.channel_manager import CHANNEL
 from utils.role_manager import ROLE
@@ -24,7 +24,7 @@ ON_READY_CALLED = False
 
 def main():
     """Start ClashRoyaleManager."""
-    guild_id = db_utils.get_guild_id()
+    guild_id = get_discord_guild_id() or db_utils.get_guild_id()
     guild = discord.Object(id=guild_id)
     intents = discord.Intents.default()
     intents.members = True
@@ -80,7 +80,7 @@ def main():
         print("Bot Ready")
         ON_READY_CALLED = True
 
-    bot.run(BOT_TOKEN)
+    bot.run(get_discord_bot_token())
 
 
 if __name__== "__main__":
