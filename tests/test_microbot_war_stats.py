@@ -7,6 +7,7 @@ DISCORD_AVAILABLE = importlib.util.find_spec("discord") is not None
 if DISCORD_AVAILABLE:
     from microbot.bot import (
         build_enhanced_war_stats_embed,
+        build_last_war_bottom_embed,
         build_player_war_stats_embed,
         collect_completed_war_stats,
         resolve_war_player,
@@ -246,7 +247,7 @@ class MicrobotWarStatsTests(unittest.TestCase):
             "#GONE": {"first_seen_at": first_seen, "last_seen_at": last_seen},
         }
 
-        embed = build_enhanced_war_stats_embed(
+        war_stats_embed = build_enhanced_war_stats_embed(
             race,
             members_payload,
             race_log,
@@ -254,9 +255,17 @@ class MicrobotWarStatsTests(unittest.TestCase):
             2000,
             2500,
         )
+        embed = build_last_war_bottom_embed(
+            race,
+            members_payload,
+            race_log,
+            presence_map,
+        )
 
-        bottom_text = field_text(embed, "Last War Rank 41+", "More Rank 41+")
+        bottom_text = field_text(embed, "Rank 41+ Players", "More Rank 41+")
 
+        self.assertEqual("", field_text(war_stats_embed, "Last War Rank 41+", "Rank 41+ Players"))
+        self.assertEqual(embed.title, "A Clan Reborn Last War Rank 41+")
         self.assertIn("41. 🟫 Member Low In - 1,200 last war, 1,500 avg/2 full wars", bottom_text)
         self.assertIn("status: in clan", bottom_text)
         self.assertIn("42. ⬜ Not in clan Gone Guy - 0 last war, 650 avg/2 full wars", bottom_text)

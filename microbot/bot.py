@@ -1035,6 +1035,25 @@ def build_enhanced_war_stats_embed(race: dict,
         continuation_title="More Candidates",
     )
 
+    completed_count = len(completed_race_dates)
+    embed.set_footer(
+        text=(
+            f"{completed_count} completed wars in window. "
+            "First seen is context only; Clash API does not expose true join date or automatic excuses."
+        )
+    )
+    return embed
+
+
+def build_last_war_bottom_embed(race: dict,
+                                members_payload: dict,
+                                race_log: dict,
+                                presence_map: dict) -> discord.Embed:
+    """Build a last completed-war audit for players ranked below the top 40."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=ROLLING_WAR_DAYS)
+    current_clan = race.get("clan") or {}
+    historical_stats, completed_race_dates = collect_completed_war_stats(race_log, current_clan.get("tag"), cutoff)
     last_war_at, bottom_lines = last_war_bottom_lines(
         race_log,
         current_clan.get("tag"),
@@ -1044,6 +1063,21 @@ def build_enhanced_war_stats_embed(race: dict,
         presence_map,
         now,
     )
+    embed = discord.Embed(
+        title=f"{current_clan.get('name', 'Clan')} Last War Rank {LAST_WAR_BOTTOM_START_RANK}+",
+        description=f"Latest completed war plus rolling full-war averages since {short_date(cutoff)}.",
+        color=discord.Color.orange(),
+        timestamp=now,
+    )
+    embed.add_field(
+        name="Last Completed War",
+        value=(
+            f"Completed: **{short_date(last_war_at)}**\n"
+            f"Ranks shown: **{LAST_WAR_BOTTOM_START_RANK}+**\n"
+            f"Completed wars in window: **{len(completed_race_dates)}**"
+        ),
+        inline=False,
+    )
     empty_bottom_text = (
         "No completed war found in the rolling window."
         if last_war_at is None
@@ -1051,17 +1085,15 @@ def build_enhanced_war_stats_embed(race: dict,
     )
     add_line_fields(
         embed,
-        f"Last War Rank {LAST_WAR_BOTTOM_START_RANK}+",
+        f"Rank {LAST_WAR_BOTTOM_START_RANK}+ Players",
         bottom_lines,
         empty_bottom_text,
         continuation_title=f"More Rank {LAST_WAR_BOTTOM_START_RANK}+",
     )
-
-    completed_count = len(completed_race_dates)
     embed.set_footer(
         text=(
-            f"{completed_count} completed wars in window. "
-            "First seen is context only; Clash API does not expose true join date or automatic excuses."
+            "Status is based on the current clan roster. "
+            "First seen is bot/API observation, not a Clash-provided join date."
         )
     )
     return embed
@@ -1514,6 +1546,45 @@ def build_bot() -> MicroBot:
             presence_map,
             current_kick_threshold(),
             current_promotion_threshold(),
+        )
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
+    @bot.tree.command(name="last_war_bottom", description="Post players ranked 41+ in the last completed war.")
+    async def last_war_bottom(interaction: discord.Interaction):
+        if not settings.clan_tag:
+            await interaction.response.send_message("No clan tag is configured for this bot.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=False)
+
+        try:
+            race, members, race_log = await asyncio.gather(
+                asyncio.to_thread(clash.get_current_river_race, settings.clan_tag),
+                asyncio.to_thread(clash.get_clan_members, settings.clan_tag),
+                asyncio.to_thread(clash.get_river_race_log, settings.clan_tag, RIVER_RACE_LOG_LIMIT),
+            )
+        except ClashNotFound:
+            await interaction.followup.send("The configured clan tag was not found.", ephemeral=True)
+            return
+        except ClashApiError:
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            return
+
+        now = dt.datetime.now(dt.timezone.utc)
+        presence_map = await asyncio.to_thread(
+            refresh_war_presence,
+            store,
+            settings.clan_tag,
+            race,
+            members,
+            race_log,
+            now,
+        )
+        embed = build_last_war_bottom_embed(
+            race,
+            members,
+            race_log,
+            presence_map,
         )
         await interaction.followup.send(embed=embed, ephemeral=False)
 

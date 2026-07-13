@@ -22,7 +22,8 @@ It is intentionally separate from the full historical manager while deployment i
 - `/set_kick_threshold <min_fame>` sets the war fame threshold used for kick suggestions.
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
 - `/war_config` shows the current war stat settings.
-- `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, suggested kick/demotion candidates, and a last-war rank 41+ audit.
+- `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kick/demotion candidates.
+- `/last_war_bottom` posts a public rank 41+ audit from the latest completed war.
 - `/show_stats [player] [member]` posts public war stats for one player by IGN, player tag, verified Discord member, or your own verified account. It states whether the player is still in the current clan roster.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
@@ -45,7 +46,7 @@ The official Clash Royale API does not expose clan chat messages, so the microbo
 
 `/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history. During training days, the active score switches to the last completed war so the post-war reset does not make everyone look like they scored 0.
 
-The last-war rank 41+ section lists everyone who ranked below 40th in the latest completed war. It includes last-war fame, rolling full-war average, first-seen age, and whether the player is still in the clan or is already gone.
+`/last_war_bottom` lists everyone who ranked below 40th in the latest completed war. It includes last-war fame, rolling full-war average, first-seen age, and whether the player is still in the clan or is already gone.
 
 `/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `/show_stats member:@someone` for a verified Discord member, or `/show_stats` for your own verified account.
 
