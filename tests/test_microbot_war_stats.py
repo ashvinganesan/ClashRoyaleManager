@@ -189,6 +189,96 @@ class MicrobotWarStatsTests(unittest.TestCase):
         self.assertIn("partial; not counted", player_history)
         self.assertIn("Kick/Demotion: **No**", player_recommendations)
 
+    def test_last_war_bottom_ranks_include_departed_players(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        last_completed = now - dt.timedelta(days=1)
+        previous_completed = last_completed - dt.timedelta(days=7)
+        first_seen = (last_completed - dt.timedelta(days=30)).isoformat()
+        last_seen = now.isoformat()
+
+        last_war_participants = [
+            {"tag": f"#P{index}", "name": f"Player {index}", "fame": 5000 - index}
+            for index in range(1, 41)
+        ]
+        last_war_participants.extend(
+            [
+                {"tag": "#LOWIN", "name": "Low In", "fame": 1200},
+                {"tag": "#GONE", "name": "Gone Guy", "fame": 0},
+            ]
+        )
+        current_participants = [
+            {"tag": "#LOWIN", "name": "Low In", "fame": 0, "decksUsedToday": 0, "decksUsed": 0},
+        ]
+        members_payload = {
+            "items": [
+                {"tag": "#LOWIN", "name": "Low In", "role": "member"},
+            ]
+        }
+        race = {
+            "periodType": "training",
+            "periodIndex": 0,
+            "clan": {"name": "A Clan Reborn", "tag": "#CLAN", "participants": current_participants},
+        }
+        race_log = {
+            "items": [
+                {
+                    "createdDate": clash_time(last_completed),
+                    "standings": [{"clan": {"tag": "#CLAN", "participants": last_war_participants}}],
+                },
+                {
+                    "createdDate": clash_time(previous_completed),
+                    "standings": [
+                        {
+                            "clan": {
+                                "tag": "#CLAN",
+                                "participants": [
+                                    {"tag": "#LOWIN", "name": "Low In", "fame": 1800},
+                                    {"tag": "#GONE", "name": "Gone Guy", "fame": 1300},
+                                ],
+                            }
+                        }
+                    ],
+                },
+            ]
+        }
+        presence_map = {
+            "#LOWIN": {"first_seen_at": first_seen, "last_seen_at": last_seen},
+            "#GONE": {"first_seen_at": first_seen, "last_seen_at": last_seen},
+        }
+
+        embed = build_enhanced_war_stats_embed(
+            race,
+            members_payload,
+            race_log,
+            presence_map,
+            2000,
+            2500,
+        )
+
+        bottom_text = field_text(embed, "Last War Rank 41+", "More Rank 41+")
+
+        self.assertIn("41. 🟫 Member Low In - 1,200 last war, 1,500 avg/2 full wars", bottom_text)
+        self.assertIn("status: in clan", bottom_text)
+        self.assertIn("42. ⬜ Not in clan Gone Guy - 0 last war, 650 avg/2 full wars", bottom_text)
+        self.assertIn("status: not in clan anymore", bottom_text)
+        self.assertNotIn("Player 40", bottom_text)
+
+        historical_stats, _ = collect_completed_war_stats(race_log, "#CLAN", now - dt.timedelta(days=35))
+        players_by_tag = war_player_index(members_payload, race, historical_stats)
+        player_embed = build_player_war_stats_embed(
+            players_by_tag["#GONE"],
+            race,
+            members_payload,
+            race_log,
+            presence_map,
+            2000,
+            2500,
+        )
+        context = field_text(player_embed, "Clan Context")
+
+        self.assertIn("not in current clan", player_embed.description)
+        self.assertIn("In current roster: **No - not in clan anymore**", context)
+
     def test_player_stats_can_resolve_ign_and_show_recommendation(self):
         now = dt.datetime.now(dt.timezone.utc)
         first_seen = (now - dt.timedelta(days=21)).isoformat()

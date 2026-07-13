@@ -26,6 +26,7 @@ MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
 RIVER_RACE_LOG_LIMIT = 10
 ROLLING_WAR_DAYS = 35
+LAST_WAR_BOTTOM_START_RANK = 41
 DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
 FULL_WAR_JOIN_CUTOFF_BEFORE_END = dt.timedelta(days=4)
@@ -345,6 +346,31 @@ def collect_completed_war_stats(race_log: dict,
     return player_stats, race_dates
 
 
+def latest_completed_clan_race(race_log: dict,
+                               clan_tag: Optional[str],
+                               cutoff: dt.datetime) -> tuple[Optional[dt.datetime], Optional[dict]]:
+    """Return the newest completed race log entry for this clan."""
+    latest_at = None
+    latest_clan = None
+
+    for log_item in race_log.get("items") or []:
+        completed_at = parse_clash_time(log_item.get("createdDate"))
+
+        if completed_at is None or completed_at < cutoff:
+            continue
+
+        standing_clan = race_clan_from_log_item(log_item, clan_tag)
+
+        if not standing_clan:
+            continue
+
+        if latest_at is None or completed_at > latest_at:
+            latest_at = completed_at
+            latest_clan = standing_clan
+
+    return latest_at, latest_clan
+
+
 def is_training_period(race: dict) -> bool:
     """Return whether the current river race period is training days."""
     return str(race.get("periodType") or "").lower() == "training"
@@ -504,6 +530,11 @@ def fame_text(value: Optional[int]) -> str:
     return f"{value:,}" if value is not None else "n/a"
 
 
+def average_fame_text(value: Optional[float]) -> str:
+    """Format an average fame value."""
+    return f"{value:,.0f}" if value is not None else "n/a"
+
+
 def add_line_fields(embed: discord.Embed,
                     title: str,
                     lines: list[str],
@@ -569,6 +600,66 @@ def war_player_index(members_payload: dict, race: dict, historical_stats: dict) 
         )
 
     return players
+
+
+def last_war_bottom_lines(race_log: dict,
+                          clan_tag: Optional[str],
+                          cutoff: dt.datetime,
+                          members_payload: dict,
+                          historical_stats: dict,
+                          presence_map: dict,
+                          now: dt.datetime) -> tuple[Optional[dt.datetime], list[str]]:
+    """Return ranked rows for players below the top 40 in the last completed war."""
+    completed_at, latest_clan = latest_completed_clan_race(race_log, clan_tag, cutoff)
+
+    if latest_clan is None:
+        return completed_at, []
+
+    roster_by_tag = {
+        member.get("tag"): member
+        for member in members_payload.get("items") or []
+        if member.get("tag")
+    }
+    ranked_participants = sorted(
+        latest_clan.get("participants") or [],
+        key=lambda participant: (
+            int_value(participant.get("fame")),
+            int_value(participant.get("decksUsed")),
+            int_value(participant.get("decksUsedToday")),
+            str(participant.get("name") or "").lower(),
+        ),
+        reverse=True,
+    )
+    rows = []
+
+    for rank, participant in enumerate(ranked_participants, 1):
+        if rank < LAST_WAR_BOTTOM_START_RANK:
+            continue
+
+        player_tag = participant.get("tag")
+
+        if not player_tag:
+            continue
+
+        roster_member = roster_by_tag.get(player_tag)
+        in_current_roster = roster_member is not None
+        player_name = (roster_member or participant).get("name", "Unknown")
+        role_text = role_label(roster_member) if in_current_roster else "⬜ Not in clan"
+        status_text = "in clan" if in_current_roster else "not in clan anymore"
+        history = historical_stats.get(player_tag, {})
+        presence = presence_map.get(player_tag)
+        first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
+        full_entries = eligible_completed_entries(history, first_seen_at)
+        average_fame = average_entry_fame(full_entries)
+        rows.append(
+            f"{rank}. {role_text} {format_name(player_name)} - "
+            f"{int_value(participant.get('fame')):,} last war, "
+            f"{average_fame_text(average_fame)} avg/{len(full_entries)} full wars, "
+            f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}), "
+            f"status: {status_text}"
+        )
+
+    return completed_at, rows
 
 
 def resolve_war_player(query: str, players_by_tag: dict[str, dict]) -> tuple[Optional[dict], Optional[str]]:
@@ -681,10 +772,11 @@ def build_player_war_stats_embed(target: dict,
         and active_fame >= kick_threshold
         and can_be_promoted(member)
     )
+    roster_status = "in current clan" if player_tag in roster_by_tag else "not in current clan"
 
     embed = discord.Embed(
         title=f"{format_name(player_name)} War Stats",
-        description=f"{role_label(member)} `{player_tag or 'unknown tag'}`",
+        description=f"{role_label(member)} `{player_tag or 'unknown tag'}` - {roster_status}",
         color=discord.Color.green() if active_fame is not None and active_fame >= kick_threshold else discord.Color.gold(),
         timestamp=now,
     )
@@ -727,7 +819,7 @@ def build_player_war_stats_embed(target: dict,
         value=(
             f"First seen: **{first_seen_line}**\n"
             f"Last seen: **{last_seen_line}**\n"
-            f"In current roster: **{'Yes' if player_tag in roster_by_tag else 'No'}**"
+            f"In current roster: **{'Yes' if player_tag in roster_by_tag else 'No - not in clan anymore'}**"
         ),
         inline=False,
     )
@@ -941,6 +1033,28 @@ def build_enhanced_war_stats_embed(race: dict,
         suggested_lines,
         "No kick/demotion suggestions at the current threshold.",
         continuation_title="More Candidates",
+    )
+
+    last_war_at, bottom_lines = last_war_bottom_lines(
+        race_log,
+        current_clan.get("tag"),
+        cutoff,
+        members_payload,
+        historical_stats,
+        presence_map,
+        now,
+    )
+    empty_bottom_text = (
+        "No completed war found in the rolling window."
+        if last_war_at is None
+        else f"No players ranked {LAST_WAR_BOTTOM_START_RANK}+ in the last completed war."
+    )
+    add_line_fields(
+        embed,
+        f"Last War Rank {LAST_WAR_BOTTOM_START_RANK}+",
+        bottom_lines,
+        empty_bottom_text,
+        continuation_title=f"More Rank {LAST_WAR_BOTTOM_START_RANK}+",
     )
 
     completed_count = len(completed_race_dates)
