@@ -24,6 +24,12 @@ MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
 RIVER_RACE_LOG_LIMIT = 10
 ROLLING_WAR_DAYS = 35
+ROLE_MARKERS = {
+    "member": "🟫 Member",
+    "elder": "🟩 Elder",
+    "coleader": "🟥 Co-leader",
+    "leader": "🟥 Leader",
+}
 
 
 def discord_name(user: Any) -> str:
@@ -143,8 +149,17 @@ def race_clan_from_log_item(log_item: dict, clan_tag: Optional[str]) -> Optional
 
 def can_be_promoted(member: dict) -> bool:
     """Return whether a clan member can still receive an in-game promotion."""
-    role = str(member.get("role") or "").replace("_", "").replace("-", "").lower()
-    return role not in {"coleader", "leader"}
+    return normalized_role(member) not in {"coleader", "leader"}
+
+
+def normalized_role(member: dict) -> str:
+    """Return a normalized Clash Royale clan role key."""
+    return str(member.get("role") or "member").replace("_", "").replace("-", "").lower()
+
+
+def role_label(member: dict) -> str:
+    """Return a compact, colored role marker for Discord war rows."""
+    return ROLE_MARKERS.get(normalized_role(member), f"⬜ {format_name(member.get('role') or 'Unknown')}")
 
 
 async def send_ephemeral(interaction: discord.Interaction, message: str):
@@ -380,7 +395,8 @@ def refresh_war_presence(store: Store,
     return store.get_member_presence_map()
 
 
-def score_line(name: str,
+def score_line(role_text: str,
+               name: str,
                current_fame: int,
                average_fame: Optional[float],
                race_count: int,
@@ -390,13 +406,17 @@ def score_line(name: str,
     """Format a compact member war score line."""
     average_text = f"{average_fame:,.0f}" if average_fame is not None else "n/a"
     return (
-        f"{format_name(name)} - {current_fame:,} current, "
+        f"{role_text} {format_name(name)} - {current_fame:,} current, "
         f"{average_text} avg/{race_count} wars, "
         f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}): {reason}"
     )
 
 
-def add_line_fields(embed: discord.Embed, title: str, lines: list[str], empty_text: str):
+def add_line_fields(embed: discord.Embed,
+                    title: str,
+                    lines: list[str],
+                    empty_text: str,
+                    continuation_title: Optional[str] = None):
     """Add all lines across as many embed fields as Discord needs."""
     if not lines:
         embed.add_field(name=title, value=empty_text, inline=False)
@@ -422,7 +442,7 @@ def add_line_fields(embed: discord.Embed, title: str, lines: list[str], empty_te
         chunks.append(current_lines)
 
     for index, chunk in enumerate(chunks, 1):
-        field_title = title if index == 1 else f"{title} ({index})"
+        field_title = title if index == 1 else (continuation_title or f"{title} ({index})")
         embed.add_field(name=field_title, value="\n".join(chunk), inline=False)
 
 
@@ -478,6 +498,7 @@ def build_enhanced_war_stats_embed(race: dict,
             continue
 
         player_name = member.get("name", "Unknown")
+        member_role = role_label(member)
         participant = current_by_tag.get(player_tag, {})
         current_fame = int_value(participant.get("fame"))
         history = historical_stats.get(player_tag, {})
@@ -489,10 +510,10 @@ def build_enhanced_war_stats_embed(race: dict,
         has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
         low_current = current_fame < kick_threshold
-        low_average = average_fame is not None and race_count >= 2 and average_fame < kick_threshold
+        low_or_missing_average = average_fame is None or average_fame < kick_threshold
 
         if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
-            rolling_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
+            rolling_rows.append((average_fame, race_count, member_role, player_name, current_fame, first_seen_at))
 
         if (average_fame is not None
                 and average_fame >= promotion_threshold
@@ -500,32 +521,27 @@ def build_enhanced_war_stats_embed(race: dict,
                 and has_leaderboard_tenure
                 and current_fame >= kick_threshold
                 and can_be_promoted(member)):
-            promotion_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
+            promotion_rows.append((average_fame, race_count, member_role, player_name, current_fame, first_seen_at))
 
-        if low_current and low_average:
+        if low_current and low_or_missing_average:
+            if average_fame is not None:
+                reason = "current and rolling average below threshold"
+            elif tracked_after_race_start:
+                reason = "current below threshold; verify join timing"
+            else:
+                reason = "current below threshold; no completed-war average yet"
+
             suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current and rolling average below threshold")
-            )
-        elif low_current and tracked_after_race_start:
-            suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current below threshold; verify join timing")
-            )
-        elif low_current:
-            suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current below threshold")
-            )
-        elif low_average:
-            suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "rolling average below threshold")
+                score_line(member_role, player_name, current_fame, average_fame, race_count, first_seen_at, now, reason)
             )
 
-    rolling_rows.sort(key=lambda row: (row[0], row[1], row[2].lower()), reverse=True)
+    rolling_rows.sort(key=lambda row: (row[0], row[1], row[3].lower()), reverse=True)
     rolling_lines = [
         (
-            f"{index}. {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
+            f"{index}. {role_text} {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
             f"{current_fame:,} current, seen {short_date(first_seen)}"
         )
-        for index, (average, race_count, name, current_fame, first_seen) in enumerate(rolling_rows[:10], 1)
+        for index, (average, race_count, role_text, name, current_fame, first_seen) in enumerate(rolling_rows[:10], 1)
     ]
     embed.add_field(
         name=f"Rolling {ROLLING_WAR_DAYS}-Day Leaders",
@@ -536,13 +552,13 @@ def build_enhanced_war_stats_embed(race: dict,
         inline=False,
     )
 
-    promotion_rows.sort(key=lambda row: (row[0], row[1], row[2].lower()), reverse=True)
+    promotion_rows.sort(key=lambda row: (row[0], row[1], row[3].lower()), reverse=True)
     promotion_lines = [
         (
-            f"{format_name(name)} - {average:,.0f} avg/{race_count} wars, "
+            f"{role_text} {format_name(name)} - {average:,.0f} avg/{race_count} wars, "
             f"{current_fame:,} current, seen {short_date(first_seen)}"
         )
-        for average, race_count, name, current_fame, first_seen in promotion_rows
+        for average, race_count, role_text, name, current_fame, first_seen in promotion_rows
     ]
     add_line_fields(
         embed,
@@ -553,9 +569,10 @@ def build_enhanced_war_stats_embed(race: dict,
 
     add_line_fields(
         embed,
-        "Suggested Kicks",
+        "Suggested Kick/Demotion",
         suggested_rows,
-        "No kick suggestions at the current threshold.",
+        "No kick/demotion suggestions at the current threshold.",
+        continuation_title="More Candidates",
     )
 
     completed_count = len(completed_race_dates)

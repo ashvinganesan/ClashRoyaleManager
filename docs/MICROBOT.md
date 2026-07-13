@@ -22,7 +22,7 @@ It is intentionally separate from the full historical manager while deployment i
 - `/set_kick_threshold <min_fame>` sets the war fame threshold used for kick suggestions.
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
 - `/war_config` shows the current war stat settings.
-- `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kicks.
+- `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kick/demotion candidates.
 - `/me` shows the member's linked account.
 - `/bot_health` confirms the bot is online.
 
@@ -53,7 +53,9 @@ Leaders can change them with:
 /set_promotion_threshold 2500
 ```
 
-Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars, 14 days first-seen tenure, and an in-game role below co-leader. Suggested kicks include members below the current-war threshold or rolling-average threshold; first-seen is shown as context for leaders, not as an automatic excuse.
+Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars, 14 days first-seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
+
+Suggested kick/demotion candidates must be below the current-war threshold and also have either no completed-war average yet or a rolling average below the kick threshold. Members above the current-war threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. First-seen is shown as context for leaders, not as an automatic excuse.
 
 Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running.
 
