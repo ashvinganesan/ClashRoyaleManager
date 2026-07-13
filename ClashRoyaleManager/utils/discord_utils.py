@@ -1,7 +1,5 @@
 """Various utility functions for Discord related needs."""
 
-import cv2
-import numpy as np
 import os
 from typing import List, Optional, Set, Tuple, Union
 
@@ -636,6 +634,9 @@ def create_deck_image(deck: Set[int], output_name: str) -> str:
     Returns:
         Path to merged image.
     """
+    import cv2
+    import numpy as np
+
     images = []
     max_height = 0
     max_width = 0

@@ -6,6 +6,7 @@ python3 -m py_compile \
   ClashRoyaleManager/utils/clash_utils.py \
   ClashRoyaleManager/utils/db_utils.py \
   ClashRoyaleManager/utils/verification_utils.py \
+  ClashRoyaleManager/utils/war_math.py \
   ClashRoyaleManager/commands/update_commands.py \
   ClashRoyaleManager/__main__.py
 
