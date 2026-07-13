@@ -155,6 +155,22 @@ class Store:
         except ValueError:
             return None
 
+    def set_promotion_threshold(self, min_average_fame: int):
+        """Persist the minimum average war fame used for promotion suggestions."""
+        self.set_setting("promotion_threshold", str(min_average_fame))
+
+    def get_promotion_threshold(self) -> Optional[int]:
+        """Return the configured minimum average war fame used for promotion suggestions."""
+        value = self.get_setting("promotion_threshold")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
     def upsert_member_presence(self,
                                player_tag: str,
                                player_name: str,

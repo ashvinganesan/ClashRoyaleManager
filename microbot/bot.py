@@ -18,6 +18,10 @@ from microbot.storage import Store
 LOG = logging.getLogger("microbot")
 DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
 DEFAULT_KICK_THRESHOLD = 2000
+DEFAULT_PROMOTION_THRESHOLD = 3000
+MIN_LEADERBOARD_WARS = 2
+MIN_LEADERBOARD_DAYS = 14
+MIN_PROMOTION_WARS = 3
 RIVER_RACE_LOG_LIMIT = 10
 ROLLING_WAR_DAYS = 35
 
@@ -99,7 +103,7 @@ def days_ago_label(value: Optional[dt.datetime], now: dt.datetime) -> str:
     if value is None:
         return "unknown"
 
-    days = max(0, (now.date() - value.astimezone(dt.timezone.utc).date()).days)
+    days = age_days(value, now) or 0
 
     if days == 0:
         return "today"
@@ -108,6 +112,20 @@ def days_ago_label(value: Optional[dt.datetime], now: dt.datetime) -> str:
         return "1 day"
 
     return f"{days} days"
+
+
+def age_days(value: Optional[dt.datetime], now: dt.datetime) -> Optional[int]:
+    """Return age in UTC calendar days."""
+    if value is None:
+        return None
+
+    return max(0, (now.date() - value.astimezone(dt.timezone.utc).date()).days)
+
+
+def has_min_tenure(value: Optional[dt.datetime], now: dt.datetime, min_days: int) -> bool:
+    """Return whether a first-seen timestamp is at least the given age."""
+    days = age_days(value, now)
+    return days is not None and days >= min_days
 
 
 def race_clan_from_log_item(log_item: dict, clan_tag: Optional[str]) -> Optional[dict]:
@@ -361,11 +379,42 @@ def score_line(name: str,
     )
 
 
+def add_line_fields(embed: discord.Embed, title: str, lines: list[str], empty_text: str):
+    """Add all lines across as many embed fields as Discord needs."""
+    if not lines:
+        embed.add_field(name=title, value=empty_text, inline=False)
+        return
+
+    chunks = []
+    current_lines = []
+    current_size = 0
+
+    for line in lines:
+        clipped_line = clip_text(line, 1000)
+        line_size = len(clipped_line) + 1
+
+        if current_lines and current_size + line_size > 1000:
+            chunks.append(current_lines)
+            current_lines = []
+            current_size = 0
+
+        current_lines.append(clipped_line)
+        current_size += line_size
+
+    if current_lines:
+        chunks.append(current_lines)
+
+    for index, chunk in enumerate(chunks, 1):
+        field_title = title if index == 1 else f"{title} ({index})"
+        embed.add_field(name=field_title, value="\n".join(chunk), inline=False)
+
+
 def build_enhanced_war_stats_embed(race: dict,
                                    members_payload: dict,
                                    race_log: dict,
                                    presence_map: dict,
-                                   kick_threshold: int) -> discord.Embed:
+                                   kick_threshold: int,
+                                   promotion_threshold: int) -> discord.Embed:
     """Build current, rolling, and kick-review war stats."""
     now = dt.datetime.now(dt.timezone.utc)
     cutoff = now - dt.timedelta(days=ROLLING_WAR_DAYS)
@@ -395,12 +444,14 @@ def build_enhanced_war_stats_embed(race: dict,
             f"Decks today: **{decks_today}/200**\n"
             f"Decks total: **{decks_total}**\n"
             f"War day estimate: **{current_week_day}/7**\n"
-            f"Kick review threshold: **{kick_threshold:,} war fame**"
+            f"Kick threshold: **{kick_threshold:,} war fame**\n"
+            f"Promotion threshold: **{promotion_threshold:,} avg war fame**"
         ),
         inline=False,
     )
 
     rolling_rows = []
+    promotion_rows = []
     suggested_rows = []
     review_rows = []
 
@@ -419,22 +470,34 @@ def build_enhanced_war_stats_embed(race: dict,
         average_fame = (sum(scores) / race_count) if race_count else None
         presence = presence_map.get(player_tag)
         first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
+        has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
         tracked_from_race_start = first_seen_at is not None and first_seen_at <= race_start + dt.timedelta(hours=6)
         low_current = current_fame < kick_threshold
         low_average = average_fame is not None and race_count >= 2 and average_fame < kick_threshold
         good_average = average_fame is not None and race_count >= 2 and average_fame >= kick_threshold
 
-        if average_fame is not None:
+        if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
             rolling_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
 
+        if (average_fame is not None
+                and average_fame >= promotion_threshold
+                and race_count >= MIN_PROMOTION_WARS
+                and has_leaderboard_tenure
+                and current_fame >= kick_threshold):
+            promotion_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
+
         if current_fame == 0 and tracked_after_race_start:
-            suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "newly tracked + 0 current fame")
+            review_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "newly tracked this war; do not count this war")
             )
         elif low_average:
             suggested_rows.append(
                 score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "rolling average below threshold")
+            )
+        elif low_current and average_fame is not None and race_count < MIN_LEADERBOARD_WARS and average_fame >= kick_threshold:
+            review_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but history is too small")
             )
         elif low_current and tracked_from_race_start and not good_average:
             suggested_rows.append(
@@ -459,26 +522,40 @@ def build_enhanced_war_stats_embed(race: dict,
     ]
     embed.add_field(
         name=f"Rolling {ROLLING_WAR_DAYS}-Day Leaders",
-        value=clip_text("\n".join(rolling_lines) or "No completed war history in the API window yet."),
+        value=clip_text(
+            "\n".join(rolling_lines)
+            or f"No eligible members yet. Requires {MIN_LEADERBOARD_WARS}+ completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen."
+        ),
         inline=False,
     )
 
-    if len(suggested_rows) > 10:
-        suggested_rows = suggested_rows[:10] + [f"...and {len(suggested_rows) - 10} more"]
-
-    embed.add_field(
-        name="Suggested Kicks",
-        value=clip_text("\n".join(suggested_rows) or "No kick suggestions at the current threshold."),
-        inline=False,
+    promotion_rows.sort(key=lambda row: (row[0], row[1], row[2].lower()), reverse=True)
+    promotion_lines = [
+        (
+            f"{format_name(name)} - {average:,.0f} avg/{race_count} wars, "
+            f"{current_fame:,} current, seen {short_date(first_seen)}"
+        )
+        for average, race_count, name, current_fame, first_seen in promotion_rows
+    ]
+    add_line_fields(
+        embed,
+        "Suggested Promotions",
+        promotion_lines,
+        f"No promotion suggestions. Requires {promotion_threshold:,}+ average, {MIN_PROMOTION_WARS}+ wars, and {MIN_LEADERBOARD_DAYS}+ days first-seen.",
     )
 
-    if len(review_rows) > 8:
-        review_rows = review_rows[:8] + [f"...and {len(review_rows) - 8} more"]
+    add_line_fields(
+        embed,
+        "Suggested Kicks",
+        suggested_rows,
+        "No kick suggestions at the current threshold.",
+    )
 
-    embed.add_field(
-        name="Review / Likely Excuse",
-        value=clip_text("\n".join(review_rows) or "No low-score exceptions detected."),
-        inline=False,
+    add_line_fields(
+        embed,
+        "Review / Likely Excuse",
+        review_rows,
+        "No low-score exceptions detected.",
     )
 
     completed_count = len(completed_race_dates)
@@ -536,6 +613,10 @@ def build_bot() -> MicroBot:
     def current_kick_threshold() -> int:
         """Return the configured minimum war fame for kick suggestions."""
         return store.get_kick_threshold() or DEFAULT_KICK_THRESHOLD
+
+    def current_promotion_threshold() -> int:
+        """Return the configured average war fame for promotion suggestions."""
+        return store.get_promotion_threshold() or DEFAULT_PROMOTION_THRESHOLD
 
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
@@ -769,13 +850,30 @@ def build_bot() -> MicroBot:
             ephemeral=True,
         )
 
+    @bot.tree.command(name="set_promotion_threshold", description="Set average war fame for promotion suggestions.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(min_average_fame="Minimum rolling average war fame for promotion suggestions")
+    async def set_promotion_threshold(interaction: discord.Interaction, min_average_fame: int):
+        if min_average_fame < 0:
+            await interaction.response.send_message("Promotion threshold must be 0 or higher.", ephemeral=True)
+            return
+
+        store.set_promotion_threshold(min_average_fame)
+        await interaction.response.send_message(
+            f"Promotion suggestion threshold set to `{min_average_fame:,}` average war fame.",
+            ephemeral=True,
+        )
+
     @bot.tree.command(name="war_config", description="Show Clan War stat settings.")
     @app_commands.checks.has_permissions(administrator=True)
     async def war_config(interaction: discord.Interaction):
         await interaction.response.send_message(
             (
                 f"Kick suggestion threshold: `{current_kick_threshold():,}` war fame\n"
+                f"Promotion suggestion threshold: `{current_promotion_threshold():,}` average war fame\n"
                 f"Rolling window: `{ROLLING_WAR_DAYS}` days\n"
+                f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
+                f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
                 "Join date note: Clash Royale does not expose true join date; this bot shows first seen."
             ),
             ephemeral=True,
@@ -860,7 +958,7 @@ def build_bot() -> MicroBot:
             await interaction.response.send_message("No clan tag is configured for this bot.", ephemeral=True)
             return
 
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=False)
 
         try:
             race, members, race_log = await asyncio.gather(
@@ -884,8 +982,9 @@ def build_bot() -> MicroBot:
             race_log,
             presence_map,
             current_kick_threshold(),
+            current_promotion_threshold(),
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
     @bot.tree.command(name="remove_verification", description="Remove a member's linked Clash Royale verification.")
     @app_commands.checks.has_permissions(administrator=True)
@@ -964,6 +1063,7 @@ def build_bot() -> MicroBot:
     @set_verified_role.error
     @set_verification_channel.error
     @set_kick_threshold.error
+    @set_promotion_threshold.error
     @war_config.error
     @verification_config.error
     @remove_verification.error
