@@ -90,7 +90,7 @@ def load_settings() -> Settings:
         clan_tag=normalize_tag(env("CLAN_TAG")),
         database_path=env("MICROBOT_DATABASE_PATH", "data/microbot.sqlite3", required=True),
         verified_role_id=env_int("DISCORD_VERIFIED_ROLE_ID"),
-        verification_ttl_minutes=env_int("VERIFICATION_TTL_MINUTES", 30, required=True),
+        verification_ttl_minutes=env_int("VERIFICATION_TTL_MINUTES", 2880, required=True),
         heartbeat_path=env("MICROBOT_HEARTBEAT_PATH", "/tmp/clash-royale-microbot.heartbeat", required=True),
     )
 
