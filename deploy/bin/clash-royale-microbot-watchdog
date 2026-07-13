@@ -4,22 +4,53 @@ set -eu
 SERVICE_NAME="${MICROBOT_SERVICE_NAME:-clash-royale-microbot.service}"
 HEARTBEAT_PATH="${MICROBOT_HEARTBEAT_PATH:-/run/clash-royale-microbot/heartbeat}"
 MAX_AGE_SECONDS="${MICROBOT_HEARTBEAT_MAX_AGE:-180}"
+REBOOT_AFTER_SECONDS="${MICROBOT_HEARTBEAT_REBOOT_AFTER:-900}"
+STATE_DIR="${MICROBOT_WATCHDOG_STATE_DIR:-/run/clash-royale-microbot-watchdog}"
+STALE_SINCE_PATH="$STATE_DIR/stale_since"
+
+reset_state() {
+    rm -f "$STALE_SINCE_PATH"
+}
+
+mark_stale() {
+    mkdir -p "$STATE_DIR"
+
+    if [ ! -f "$STALE_SINCE_PATH" ]; then
+        printf '%s\n' "$now_seconds" > "$STALE_SINCE_PATH"
+    fi
+
+    cat "$STALE_SINCE_PATH"
+}
 
 if ! systemctl is-active --quiet "$SERVICE_NAME"; then
-    exit 0
-fi
-
-if [ ! -f "$HEARTBEAT_PATH" ]; then
-    echo "Heartbeat file is missing; restarting $SERVICE_NAME"
-    systemctl restart "$SERVICE_NAME"
+    reset_state
     exit 0
 fi
 
 now_seconds="$(date +%s)"
-heartbeat_seconds="$(stat -c %Y "$HEARTBEAT_PATH")"
-age_seconds=$((now_seconds - heartbeat_seconds))
 
-if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
-    echo "Heartbeat is ${age_seconds}s old; restarting $SERVICE_NAME"
-    systemctl restart "$SERVICE_NAME"
+if [ ! -f "$HEARTBEAT_PATH" ]; then
+    heartbeat_status="missing"
+    age_seconds=$((MAX_AGE_SECONDS + 1))
+else
+    heartbeat_seconds="$(stat -c %Y "$HEARTBEAT_PATH")"
+    age_seconds=$((now_seconds - heartbeat_seconds))
+    heartbeat_status="${age_seconds}s old"
 fi
+
+if [ "$age_seconds" -le "$MAX_AGE_SECONDS" ]; then
+    reset_state
+    exit 0
+fi
+
+stale_since="$(mark_stale)"
+stale_duration=$((now_seconds - stale_since))
+
+if [ "$stale_duration" -ge "$REBOOT_AFTER_SECONDS" ]; then
+    echo "Heartbeat is $heartbeat_status and stale for ${stale_duration}s; rebooting VM"
+    systemctl reboot
+    exit 0
+fi
+
+echo "Heartbeat is $heartbeat_status and stale for ${stale_duration}s; restarting $SERVICE_NAME"
+systemctl restart "$SERVICE_NAME"

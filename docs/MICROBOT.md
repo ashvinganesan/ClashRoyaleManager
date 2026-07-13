@@ -76,7 +76,7 @@ The production service unit lives at:
 deploy/systemd/clash-royale-microbot.service
 ```
 
-The bot writes a heartbeat file while connected to Discord. The optional watchdog timer restarts only the bot service when that heartbeat is stale.
+The bot writes a heartbeat file while connected to Discord. The watchdog timer restarts only the bot service when that heartbeat is stale for 3 minutes, then reboots the VM if the heartbeat remains stale for 15 minutes.
 
 Install the service and watchdog on the VM:
 
