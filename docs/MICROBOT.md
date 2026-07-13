@@ -18,6 +18,7 @@ It is intentionally separate from the full historical manager while deployment i
 - `/remove_verification <member>` lets a Discord admin remove a member's linked account and verified role.
 - `/set_verified_role <role>` sets the role assigned after successful verification.
 - `/set_verification_channel <channel>` sets the leader-only channel where pending verification requests are posted.
+- `/set_auto_verification <enabled>` toggles auto-confirming `/verify` when the player tag is currently in the clan.
 - `/verification_config` shows the current verification role and review channel settings.
 - `/set_kick_threshold <min_fame>` sets the war fame threshold used for kick suggestions.
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
@@ -38,11 +39,13 @@ It is intentionally separate from the full historical manager while deployment i
 6. Leave one member verification channel visible to `@everyone`.
 7. Hide the rest of the server from `@everyone`, then allow `Verified` to view channels, send messages, and use application commands in the normal categories/channels.
 
-Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
+Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, `/set_auto_verification`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
 
 `/war_stats`, `/last_war_bottom`, `/show_stats`, and `/show` are public bot commands. If a verified member cannot see them in Discord's slash-command picker, check that their channel/category permissions include **Use Application Commands** for the `Verified` role and that the bot is allowed in that channel.
 
-The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. If the request expires before a leader handles it, the fallback command with `player_tag` in the leader message can still direct-verify that member. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
+The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The default flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin or Elder confirms after seeing the code in-game. If the request expires before a leader handles it, the fallback command with `player_tag` in the leader message can still direct-verify that member. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN. Discord does not allow bots to change the server owner's nickname.
+
+Auto verification is disabled by default. If an admin runs `/set_auto_verification enabled:true`, `/verify player_tag:#TAG` immediately auto-confirms the member when that tag is currently in the configured clan. The bot still posts an "Auto Confirmed Clash Royale Verification" audit message in the leader verification channel.
 
 ## War Stats
 

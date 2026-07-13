@@ -139,6 +139,14 @@ class Store:
         except ValueError:
             return None
 
+    def set_auto_verification_enabled(self, enabled: bool):
+        """Persist whether /verify should immediately link current clan tags."""
+        self.set_setting("auto_verification_enabled", "1" if enabled else "0")
+
+    def get_auto_verification_enabled(self) -> bool:
+        """Return whether /verify should immediately link current clan tags."""
+        return self.get_setting("auto_verification_enabled") == "1"
+
     def set_kick_threshold(self, min_fame: int):
         """Persist the minimum war fame used for kick suggestions."""
         self.set_setting("kick_threshold", str(min_fame))

@@ -1199,6 +1199,10 @@ def build_bot() -> MicroBot:
         """Return the configured average war fame for promotion suggestions."""
         return store.get_promotion_threshold() or DEFAULT_PROMOTION_THRESHOLD
 
+    def current_auto_verification_enabled() -> bool:
+        """Return whether /verify should immediately link current clan tags."""
+        return store.get_auto_verification_enabled()
+
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
         role_id = current_verified_role_id()
@@ -1338,6 +1342,62 @@ def build_bot() -> MicroBot:
 
         return f"I also posted this request in <#{channel_id}>."
 
+    async def announce_auto_verification(interaction: discord.Interaction,
+                                         player: dict,
+                                         clan_tag: Optional[str],
+                                         clan_name: Optional[str]) -> Optional[str]:
+        """Post an auto-verification audit message to the leader channel."""
+        channel_id = current_verification_channel_id()
+        channel = None
+
+        if channel_id is None and interaction.guild:
+            channel = discord.utils.get(
+                interaction.guild.text_channels,
+                name=DEFAULT_VERIFICATION_CHANNEL_NAME,
+            )
+
+            if channel:
+                store.set_verification_channel_id(channel.id)
+                channel_id = channel.id
+
+        if channel_id is None:
+            return (
+                "No leader verification channel is configured yet, so I could not post the auto-verification audit."
+            )
+
+        if channel is None:
+            channel = bot.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except discord.HTTPException:
+                return "I could not find the configured leader verification channel for the auto-verification audit."
+
+        if not hasattr(channel, "send"):
+            return "The configured verification destination is not a text channel."
+
+        embed = discord.Embed(
+            title="Auto Confirmed Clash Royale Verification",
+            color=discord.Color.green(),
+            timestamp=dt.datetime.now(dt.timezone.utc),
+        )
+        embed.add_field(name="Discord Member", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Player", value=f"{player['name']} `{player['tag']}`", inline=False)
+        embed.add_field(name="Mode", value="Auto confirmed by current clan tag", inline=False)
+
+        if clan_name:
+            embed.add_field(name="Clan", value=f"{clan_name} `{clan_tag}`", inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            return "I do not have permission to post the auto-verification audit in the configured leader channel."
+        except discord.HTTPException:
+            return "Discord rejected the auto-verification audit message."
+
+        return f"I also posted the auto-verification audit in <#{channel_id}>."
+
     @bot.tree.command(name="bot_health", description="Show whether the lightweight bot is online.")
     async def bot_health(interaction: discord.Interaction):
         await interaction.response.send_message("Online. SQLite store is initialized.", ephemeral=True)
@@ -1394,6 +1454,22 @@ def build_bot() -> MicroBot:
 
         await interaction.response.send_message(message, ephemeral=True)
 
+    @bot.tree.command(name="set_auto_verification", description="Enable or disable automatic verification by clan tag.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(enabled="If true, /verify immediately links player tags currently in the clan")
+    async def set_auto_verification(interaction: discord.Interaction, enabled: bool):
+        store.set_auto_verification_enabled(enabled)
+        state = "enabled" if enabled else "disabled"
+        detail = (
+            "Members who run `/verify player_tag:#TAG` will be auto confirmed if that tag is currently in the clan."
+            if enabled
+            else "Members who run `/verify` will receive a clan-chat code for leader confirmation."
+        )
+        await interaction.response.send_message(
+            f"Auto verification is now `{state}`.\n{detail}",
+            ephemeral=True,
+        )
+
     @bot.tree.command(name="verification_config", description="Show verification role configuration.")
     @app_commands.checks.has_permissions(administrator=True)
     async def verification_config(interaction: discord.Interaction):
@@ -1414,6 +1490,8 @@ def build_bot() -> MicroBot:
             channel = bot.get_channel(channel_id)
             channel_label = channel.mention if channel else f"`{channel_id}` (not found)"
             lines.append(f"Leader verification channel: {channel_label}")
+
+        lines.append(f"Auto verification: {'enabled' if current_auto_verification_enabled() else 'disabled'}")
 
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -1505,6 +1583,37 @@ def build_bot() -> MicroBot:
 
         if settings.clan_tag and clan_tag != settings.clan_tag:
             await interaction.followup.send("That player is not currently in the configured clan.", ephemeral=True)
+            return
+
+        if current_auto_verification_enabled():
+            if not isinstance(interaction.user, discord.Member):
+                await interaction.followup.send("Auto verification can only run inside the server.", ephemeral=True)
+                return
+
+            store.approve_direct_verification(
+                interaction.user.id,
+                interaction.user.id,
+                discord_name(interaction.user),
+                player["tag"],
+                player["name"],
+                clan_tag,
+                clan_name,
+            )
+            role_note = await add_verified_role(interaction, interaction.user)
+            nickname_note = await set_member_nickname(interaction.user, player["name"])
+            announcement_note = await announce_auto_verification(interaction, player, clan_tag, clan_name)
+            message = f"Auto confirmed {interaction.user.mention} as {player['name']} `{player['tag']}`."
+
+            if role_note:
+                message += f"\n{role_note}"
+
+            if nickname_note:
+                message += f"\n{nickname_note}"
+
+            if announcement_note:
+                message += f"\n{announcement_note}"
+
+            await interaction.followup.send(message, ephemeral=True)
             return
 
         code = make_code()
@@ -1844,6 +1953,7 @@ def build_bot() -> MicroBot:
 
     @set_verified_role.error
     @set_verification_channel.error
+    @set_auto_verification.error
     @set_kick_threshold.error
     @set_promotion_threshold.error
     @war_config.error

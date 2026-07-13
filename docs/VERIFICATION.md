@@ -19,6 +19,14 @@ If the active challenge expires before a leader handles it, the leader can still
 
 That path direct-verifies the member by admin action after confirming the player tag still belongs to the configured clan.
 
+Admins can enable a lower-friction mode with:
+
+```text
+/set_auto_verification enabled:true
+```
+
+When enabled, `/verify player_tag:#PLAYER_TAG` immediately auto-confirms the member if the tag is currently in the configured clan. The bot posts an "Auto Confirmed Clash Royale Verification" audit message in the leader verification channel. Disable it with `/set_auto_verification enabled:false` to return to clan-chat code confirmation.
+
 ## Why Manual Confirmation Is Required
 
 Reading Clash Royale clan chat would require unsupported automation or scraping. This project should stay on official APIs and avoid account-risky behavior.

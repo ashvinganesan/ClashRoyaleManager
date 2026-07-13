@@ -30,6 +30,19 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertEqual(store.get_verification_channel_id(), 987654321)
 
+    def test_auto_verification_setting_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            self.assertFalse(store.get_auto_verification_enabled())
+
+            store.set_auto_verification_enabled(True)
+            self.assertTrue(store.get_auto_verification_enabled())
+
+            store.set_auto_verification_enabled(False)
+            self.assertFalse(store.get_auto_verification_enabled())
+
     def test_kick_threshold_setting_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(str(Path(directory) / "microbot.sqlite3"))
