@@ -269,6 +269,20 @@ def build_bot() -> MicroBot:
 
         return f"Removed {role.mention}."
 
+    async def set_member_nickname(member: discord.Member, nickname: str) -> Optional[str]:
+        """Set a member's server nickname and return a user-facing note."""
+        if member.nick == nickname:
+            return None
+
+        try:
+            await member.edit(nick=nickname, reason="Clash Royale clan verification")
+        except discord.Forbidden:
+            return "I could not update the nickname. I need Manage Nicknames and a role above that member."
+        except discord.HTTPException:
+            return "Discord rejected the nickname update."
+
+        return f"Updated nickname to `{nickname}`."
+
     async def announce_verification_challenge(interaction: discord.Interaction,
                                               player: dict,
                                               code: str,
@@ -301,7 +315,10 @@ def build_bot() -> MicroBot:
         embed.add_field(name="Expires", value=f"`{expires_at}`", inline=True)
         embed.add_field(
             name="Leader Action",
-            value=f"After you see the code in clan chat, run `/confirm_verification` for {interaction.user.mention}.",
+            value=(
+                f"After you see the code in clan chat, run `/confirm_verification member:{interaction.user.mention}`.\n"
+                f"Fallback with tag: `/confirm_verification member:{interaction.user.mention} player_tag:{player['tag']}`"
+            ),
             inline=False,
         )
 
@@ -508,18 +525,24 @@ def build_bot() -> MicroBot:
     @bot.tree.command(name="confirm_verification", description="Leader confirmation after seeing a code in clan chat.")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(member="Discord member who posted the code")
-    @app_commands.describe(player_tag="Player tag being verified")
-    async def confirm_verification(interaction: discord.Interaction, member: discord.Member, player_tag: str):
+    @app_commands.describe(player_tag="Optional player tag if the member has more than one pending request")
+    async def confirm_verification(interaction: discord.Interaction,
+                                   member: discord.Member,
+                                   player_tag: Optional[str] = None):
         await interaction.response.defer(thinking=True, ephemeral=True)
         normalized_tag = normalize_tag(player_tag)
-        challenge = store.get_pending_challenge(member.id, normalized_tag)
+        challenge = (
+            store.get_pending_challenge(member.id, normalized_tag)
+            if normalized_tag
+            else store.get_pending_challenge_for_discord_id(member.id)
+        )
 
         if challenge is None:
             await interaction.followup.send("No active verification challenge found.", ephemeral=True)
             return
 
         try:
-            player = await asyncio.to_thread(clash.get_player, normalized_tag)
+            player = await asyncio.to_thread(clash.get_player, challenge["player_tag"])
         except ClashApiError:
             await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
@@ -536,11 +559,15 @@ def build_bot() -> MicroBot:
             clan_name,
         )
         role_note = await add_verified_role(interaction, member)
+        nickname_note = await set_member_nickname(member, player["name"])
 
         message = f"Verified {member.mention} as {player['name']} `{player['tag']}`."
 
         if role_note:
             message += f"\n{role_note}"
+
+        if nickname_note:
+            message += f"\n{nickname_note}"
 
         await interaction.followup.send(message, ephemeral=True)
 

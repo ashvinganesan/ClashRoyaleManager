@@ -183,6 +183,26 @@ class Store:
                 (discord_id, player_tag, now),
             ).fetchone()
 
+    def get_pending_challenge_for_discord_id(self, discord_id: int) -> Optional[sqlite3.Row]:
+        """Return the newest pending challenge for a member."""
+        now = iso(utc_now())
+
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE verification_challenges SET status = 'expired' WHERE status = 'pending' AND expires_at < ?",
+                (now,),
+            )
+            return connection.execute(
+                """
+                SELECT *
+                FROM verification_challenges
+                WHERE discord_id = ? AND status = 'pending' AND expires_at >= ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (discord_id, now),
+            ).fetchone()
+
     def get_link_by_discord_id(self, discord_id: int) -> Optional[sqlite3.Row]:
         """Return a linked account by Discord id."""
         with self.connect() as connection:

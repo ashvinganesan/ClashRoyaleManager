@@ -14,7 +14,7 @@ It is intentionally separate from the full historical manager while deployment i
 ## Commands
 
 - `/verify <player_tag>` creates a short code for the member to post in Clash Royale clan chat.
-- `/confirm_verification <member> <player_tag>` lets a Discord admin approve the link after seeing the code.
+- `/confirm_verification <member> [player_tag]` lets a Discord admin approve the link after seeing the code.
 - `/remove_verification <member>` lets a Discord admin remove a member's linked account and verified role.
 - `/set_verified_role <role>` sets the role assigned after successful verification.
 - `/set_verification_channel <channel>` sets the leader-only channel where pending verification requests are posted.
@@ -27,7 +27,7 @@ It is intentionally separate from the full historical manager while deployment i
 
 1. Create a `Verified` role in Discord.
 2. Move the bot's role above `Verified` in Server Settings > Roles.
-3. Make sure the bot has `Manage Roles`.
+3. Make sure the bot has `Manage Roles` and `Manage Nicknames`.
 4. Run `/set_verified_role @Verified`.
 5. Create a leader-only verification review channel and run `/set_verification_channel #channel-name`.
 6. Leave one member verification channel visible to `@everyone`.
@@ -35,7 +35,7 @@ It is intentionally separate from the full historical manager while deployment i
 
 Only users with Discord administrator permission can run `/confirm_verification`, `/remove_verification`, `/set_verified_role`, `/set_verification_channel`, and `/verification_config`.
 
-The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game.
+The official Clash Royale API does not expose clan chat messages, so the microbot cannot safely auto-read clan chat. The supported flow is: a member posts the generated code in Clash Royale, the bot posts a pending request in the leader review channel, and an admin confirms after seeing the code in-game. Confirmation assigns the verified role and tries to set the member's server nickname to their Clash Royale IGN.
 
 ## Run
 

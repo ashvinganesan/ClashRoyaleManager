@@ -58,6 +58,25 @@ class MicrobotStorageTests(unittest.TestCase):
             self.assertEqual(removed["player_tag"], "#ABC123")
             self.assertIsNone(store.get_link_by_discord_id(2))
 
+    def test_get_pending_challenge_for_discord_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            store.create_challenge(
+                discord_id=2,
+                discord_name="Tester",
+                player_tag="#ABC123",
+                player_name="Player",
+                challenge_code="CR-TEST12",
+                ttl_minutes=30,
+            )
+
+            challenge = store.get_pending_challenge_for_discord_id(2)
+
+            self.assertIsNotNone(challenge)
+            self.assertEqual(challenge["player_tag"], "#ABC123")
+
 
 if __name__ == "__main__":
     unittest.main()
