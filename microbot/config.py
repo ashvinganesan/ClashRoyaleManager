@@ -78,6 +78,7 @@ class Settings:
     database_path: str
     verified_role_id: Optional[int]
     verification_ttl_minutes: int
+    heartbeat_path: str
 
 
 def load_settings() -> Settings:
@@ -90,6 +91,7 @@ def load_settings() -> Settings:
         database_path=env("MICROBOT_DATABASE_PATH", "data/microbot.sqlite3", required=True),
         verified_role_id=env_int("DISCORD_VERIFIED_ROLE_ID"),
         verification_ttl_minutes=env_int("VERIFICATION_TTL_MINUTES", 30, required=True),
+        heartbeat_path=env("MICROBOT_HEARTBEAT_PATH", "/tmp/clash-royale-microbot.heartbeat", required=True),
     )
 
 

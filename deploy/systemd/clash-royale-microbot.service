@@ -10,9 +10,14 @@ WorkingDirectory=/home/opc/ClashRoyaleManager
 EnvironmentFile=/etc/clash-royale-microbot.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/home/opc/ClashRoyaleManager:/home/opc/ClashRoyaleManager/.venv/lib/python3.9/site-packages
+Environment=MICROBOT_HEARTBEAT_PATH=/run/clash-royale-microbot/heartbeat
+RuntimeDirectory=clash-royale-microbot
 ExecStart=/usr/bin/python3 -m microbot.bot
-Restart=on-failure
+Restart=always
 RestartSec=10
+MemoryAccounting=yes
+MemoryMax=180M
+MemorySwapMax=256M
 
 [Install]
 WantedBy=multi-user.target

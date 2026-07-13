@@ -6,6 +6,7 @@ import logging
 import re
 import secrets
 import string
+from pathlib import Path
 from typing import Any, Optional
 
 import discord
@@ -856,6 +857,7 @@ class MicroBot(discord.Client):
         self.store = store
         self.clash = clash
         self.tree = app_commands.CommandTree(self)
+        self._heartbeat_task: Optional[asyncio.Task] = None
 
     async def setup_hook(self):
         """Register slash commands."""
@@ -870,6 +872,30 @@ class MicroBot(discord.Client):
     async def on_ready(self):
         """Log startup."""
         LOG.info("Micro bot ready as %s", self.user)
+
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self.write_heartbeat_loop())
+
+    async def write_heartbeat_loop(self):
+        """Write a liveness marker for systemd diagnostics/watchdog scripts."""
+        heartbeat_path = Path(self.settings.heartbeat_path)
+        heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+
+        while not self.is_closed():
+            try:
+                now = dt.datetime.now(dt.timezone.utc).isoformat()
+                latency_ms = self.latency * 1000 if self.latency is not None else -1
+                heartbeat_path.write_text(
+                    f"ready={self.is_ready()}\n"
+                    f"user={self.user}\n"
+                    f"latency_ms={latency_ms:.0f}\n"
+                    f"updated_at={now}\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                LOG.exception("Failed to write heartbeat file")
+
+            await asyncio.sleep(60)
 
 
 def build_bot() -> MicroBot:

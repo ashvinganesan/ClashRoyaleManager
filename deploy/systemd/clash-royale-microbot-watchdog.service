@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart Clash Royale Discord microbot when its heartbeat is stale
+Wants=clash-royale-microbot.service
+
+[Service]
+Type=oneshot
+Environment=MICROBOT_HEARTBEAT_PATH=/run/clash-royale-microbot/heartbeat
+Environment=MICROBOT_HEARTBEAT_MAX_AGE=180
+ExecStart=/usr/local/bin/clash-royale-microbot-watchdog

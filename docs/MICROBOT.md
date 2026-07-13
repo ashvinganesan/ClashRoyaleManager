@@ -76,13 +76,21 @@ The production service unit lives at:
 deploy/systemd/clash-royale-microbot.service
 ```
 
-Install it on the VM:
+The bot writes a heartbeat file while connected to Discord. The optional watchdog timer restarts only the bot service when that heartbeat is stale.
+
+Install the service and watchdog on the VM:
 
 ```bash
 sudo cp deploy/systemd/clash-royale-microbot.service /etc/systemd/system/
+sudo cp deploy/systemd/clash-royale-microbot-watchdog.service /etc/systemd/system/
+sudo cp deploy/systemd/clash-royale-microbot-watchdog.timer /etc/systemd/system/
+sudo cp deploy/bin/clash-royale-microbot-watchdog /usr/local/bin/
+sudo chmod 755 /usr/local/bin/clash-royale-microbot-watchdog
 sudo systemctl daemon-reload
 sudo systemctl enable clash-royale-microbot
+sudo systemctl enable clash-royale-microbot-watchdog.timer
 sudo systemctl start clash-royale-microbot
+sudo systemctl start clash-royale-microbot-watchdog.timer
 ```
 
 Check logs:
@@ -106,4 +114,5 @@ Optional:
 ```dotenv
 DISCORD_VERIFIED_ROLE_ID=
 VERIFICATION_TTL_MINUTES=30
+MICROBOT_HEARTBEAT_PATH=/run/clash-royale-microbot/heartbeat
 ```

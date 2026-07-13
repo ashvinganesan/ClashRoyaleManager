@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+SERVICE_NAME="${MICROBOT_SERVICE_NAME:-clash-royale-microbot.service}"
+HEARTBEAT_PATH="${MICROBOT_HEARTBEAT_PATH:-/run/clash-royale-microbot/heartbeat}"
+MAX_AGE_SECONDS="${MICROBOT_HEARTBEAT_MAX_AGE:-180}"
+
+if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    exit 0
+fi
+
+if [ ! -f "$HEARTBEAT_PATH" ]; then
+    echo "Heartbeat file is missing; restarting $SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
+    exit 0
+fi
+
+now_seconds="$(date +%s)"
+heartbeat_seconds="$(stat -c %Y "$HEARTBEAT_PATH")"
+age_seconds=$((now_seconds - heartbeat_seconds))
+
+if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
+    echo "Heartbeat is ${age_seconds}s old; restarting $SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
+fi
