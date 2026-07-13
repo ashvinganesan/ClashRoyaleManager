@@ -18,6 +18,17 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertEqual(store.get_verified_role_id(), 123456789)
 
+    def test_verification_channel_setting_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+
+            self.assertIsNone(store.get_verification_channel_id())
+
+            store.set_verification_channel_id(987654321)
+
+            self.assertEqual(store.get_verification_channel_id(), 987654321)
+
     def test_invalid_verified_role_setting_returns_none(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(str(Path(directory) / "microbot.sqlite3"))

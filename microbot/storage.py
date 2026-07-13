@@ -114,6 +114,22 @@ class Store:
         except ValueError:
             return None
 
+    def set_verification_channel_id(self, channel_id: int):
+        """Persist the Discord channel id used for verification review."""
+        self.set_setting("verification_channel_id", str(channel_id))
+
+    def get_verification_channel_id(self) -> Optional[int]:
+        """Return the configured Discord verification review channel id."""
+        value = self.get_setting("verification_channel_id")
+
+        if not value:
+            return None
+
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
     def create_challenge(self,
                          discord_id: int,
                          discord_name: str,

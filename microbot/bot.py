@@ -214,6 +214,10 @@ def build_bot() -> MicroBot:
         """Return the configured verified role, preferring the database setting."""
         return store.get_verified_role_id() or settings.verified_role_id
 
+    def current_verification_channel_id() -> Optional[int]:
+        """Return the configured verification review channel."""
+        return store.get_verification_channel_id()
+
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
         role_id = current_verified_role_id()
@@ -265,6 +269,51 @@ def build_bot() -> MicroBot:
 
         return f"Removed {role.mention}."
 
+    async def announce_verification_challenge(interaction: discord.Interaction,
+                                              player: dict,
+                                              code: str,
+                                              expires_at: str) -> Optional[str]:
+        """Post a pending verification request to the configured leader channel."""
+        channel_id = current_verification_channel_id()
+
+        if channel_id is None:
+            return "No leader verification channel is configured yet."
+
+        channel = bot.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except discord.HTTPException:
+                return "I could not find the configured leader verification channel."
+
+        if not hasattr(channel, "send"):
+            return "The configured verification destination is not a text channel."
+
+        embed = discord.Embed(
+            title="Pending Clash Royale Verification",
+            color=discord.Color.gold(),
+            timestamp=dt.datetime.now(dt.timezone.utc),
+        )
+        embed.add_field(name="Discord Member", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Player", value=f"{player['name']} `{player['tag']}`", inline=False)
+        embed.add_field(name="Clan Chat Code", value=f"`{code}`", inline=True)
+        embed.add_field(name="Expires", value=f"`{expires_at}`", inline=True)
+        embed.add_field(
+            name="Leader Action",
+            value=f"After you see the code in clan chat, run `/confirm_verification` for {interaction.user.mention}.",
+            inline=False,
+        )
+
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            return "I do not have permission to post in the configured leader verification channel."
+        except discord.HTTPException:
+            return "Discord rejected the leader verification channel message."
+
+        return f"I also posted this request in <#{channel_id}>."
+
     @bot.tree.command(name="bot_health", description="Show whether the lightweight bot is online.")
     async def bot_health(interaction: discord.Interaction):
         await interaction.response.send_message("Online. SQLite store is initialized.", ephemeral=True)
@@ -294,18 +343,55 @@ def build_bot() -> MicroBot:
 
         await interaction.response.send_message(message, ephemeral=True)
 
+    @bot.tree.command(name="set_verification_channel", description="Set the leader channel for verification requests.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(channel="Leader-only channel where pending verification requests should be posted")
+    async def set_verification_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+        notes = []
+        bot_member = interaction.guild.me if interaction.guild else None
+
+        if bot_member:
+            permissions = channel.permissions_for(bot_member)
+
+            if not permissions.view_channel:
+                notes.append("I need View Channel in that channel.")
+
+            if not permissions.send_messages:
+                notes.append("I need Send Messages in that channel.")
+
+            if not permissions.embed_links:
+                notes.append("I need Embed Links in that channel.")
+
+        store.set_verification_channel_id(channel.id)
+        message = f"Leader verification channel set to {channel.mention}."
+
+        if notes:
+            message += "\n" + "\n".join(notes)
+
+        await interaction.response.send_message(message, ephemeral=True)
+
     @bot.tree.command(name="verification_config", description="Show verification role configuration.")
     @app_commands.checks.has_permissions(administrator=True)
     async def verification_config(interaction: discord.Interaction):
         role_id = current_verified_role_id()
+        channel_id = current_verification_channel_id()
+        lines = []
 
         if role_id is None:
-            await interaction.response.send_message("No verified role is configured.", ephemeral=True)
-            return
+            lines.append("Verified role: not configured")
+        else:
+            role = interaction.guild.get_role(role_id) if interaction.guild else None
+            role_label = role.mention if role else f"`{role_id}` (not found)"
+            lines.append(f"Verified role: {role_label}")
 
-        role = interaction.guild.get_role(role_id) if interaction.guild else None
-        role_label = role.mention if role else f"`{role_id}` (not found)"
-        await interaction.response.send_message(f"Verified role: {role_label}", ephemeral=True)
+        if channel_id is None:
+            lines.append("Leader verification channel: not configured")
+        else:
+            channel = bot.get_channel(channel_id)
+            channel_label = channel.mention if channel else f"`{channel_id}` (not found)"
+            lines.append(f"Leader verification channel: {channel_label}")
+
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @bot.tree.command(name="me", description="Show your linked Clash Royale account.")
     async def me(interaction: discord.Interaction):
@@ -371,6 +457,11 @@ def build_bot() -> MicroBot:
 
         if clan_name:
             message += f"\nClan: {clan_name} `{clan_tag}`"
+
+        announcement_note = await announce_verification_challenge(interaction, player, code, expires_at)
+
+        if announcement_note:
+            message += f"\n{announcement_note}"
 
         message += f"\nExpires: `{expires_at}`"
         await interaction.followup.send(message, ephemeral=True)
@@ -462,6 +553,7 @@ def build_bot() -> MicroBot:
             await send_ephemeral(interaction, "Unexpected error.")
 
     @set_verified_role.error
+    @set_verification_channel.error
     @verification_config.error
     @remove_verification.error
     async def verification_admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
