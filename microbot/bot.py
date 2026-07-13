@@ -18,7 +18,7 @@ from microbot.storage import Store
 LOG = logging.getLogger("microbot")
 DEFAULT_VERIFICATION_CHANNEL_NAME = "verification-confirmation"
 DEFAULT_KICK_THRESHOLD = 2000
-DEFAULT_PROMOTION_THRESHOLD = 3000
+DEFAULT_PROMOTION_THRESHOLD = 2500
 MIN_LEADERBOARD_WARS = 2
 MIN_LEADERBOARD_DAYS = 14
 MIN_PROMOTION_WARS = 3
@@ -462,9 +462,8 @@ def build_enhanced_war_stats_embed(race: dict,
     )
 
     rolling_rows = []
-    promotion_rows = []
     suggested_rows = []
-    review_rows = []
+    promotion_rows = []
 
     for member in members:
         player_tag = member.get("tag")
@@ -483,10 +482,8 @@ def build_enhanced_war_stats_embed(race: dict,
         first_seen_at = parse_iso_datetime(presence["first_seen_at"]) if presence else None
         has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
-        tracked_from_race_start = first_seen_at is not None and first_seen_at <= race_start + dt.timedelta(hours=6)
         low_current = current_fame < kick_threshold
         low_average = average_fame is not None and race_count >= 2 and average_fame < kick_threshold
-        good_average = average_fame is not None and race_count >= 2 and average_fame >= kick_threshold
 
         if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
             rolling_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
@@ -498,29 +495,21 @@ def build_enhanced_war_stats_embed(race: dict,
                 and current_fame >= kick_threshold):
             promotion_rows.append((average_fame, race_count, player_name, current_fame, first_seen_at))
 
-        if current_fame == 0 and tracked_after_race_start:
-            review_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "newly tracked this war; do not count this war")
+        if low_current and low_average:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current and rolling average below threshold")
+            )
+        elif low_current and tracked_after_race_start:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current below threshold; verify join timing")
+            )
+        elif low_current:
+            suggested_rows.append(
+                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "current below threshold")
             )
         elif low_average:
             suggested_rows.append(
                 score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "rolling average below threshold")
-            )
-        elif low_current and average_fame is not None and race_count < MIN_LEADERBOARD_WARS and average_fame >= kick_threshold:
-            review_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but history is too small")
-            )
-        elif low_current and tracked_from_race_start and not good_average:
-            suggested_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "below threshold and tracked from war start")
-            )
-        elif low_current and tracked_after_race_start and current_fame > 0:
-            review_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but tracked after war start")
-            )
-        elif low_current and good_average:
-            review_rows.append(
-                score_line(player_name, current_fame, average_fame, race_count, first_seen_at, now, "low current, but good rolling average")
             )
 
     rolling_rows.sort(key=lambda row: (row[0], row[1], row[2].lower()), reverse=True)
@@ -562,18 +551,11 @@ def build_enhanced_war_stats_embed(race: dict,
         "No kick suggestions at the current threshold.",
     )
 
-    add_line_fields(
-        embed,
-        "Review / Likely Excuse",
-        review_rows,
-        "No low-score exceptions detected.",
-    )
-
     completed_count = len(completed_race_dates)
     embed.set_footer(
         text=(
             f"{completed_count} completed wars in window. "
-            "First seen is tracked by bot/API observations; Clash API does not expose true join date."
+            "First seen is context only; Clash API does not expose true join date or automatic excuses."
         )
     )
     return embed

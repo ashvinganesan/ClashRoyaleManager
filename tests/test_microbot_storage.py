@@ -48,9 +48,9 @@ class MicrobotStorageTests(unittest.TestCase):
 
             self.assertIsNone(store.get_promotion_threshold())
 
-            store.set_promotion_threshold(3000)
+            store.set_promotion_threshold(2500)
 
-            self.assertEqual(store.get_promotion_threshold(), 3000)
+            self.assertEqual(store.get_promotion_threshold(), 2500)
 
     def test_invalid_verified_role_setting_returns_none(self):
         with tempfile.TemporaryDirectory() as directory:

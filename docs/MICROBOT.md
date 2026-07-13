@@ -44,16 +44,16 @@ The official Clash Royale API does not expose clan chat messages, so the microbo
 
 `/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history.
 
-The default kick suggestion threshold is `2000` war fame. The default promotion suggestion threshold is `3000` average war fame.
+The default kick suggestion threshold is `2000` war fame. The default promotion suggestion threshold is `2500` average war fame.
 
 Leaders can change them with:
 
 ```text
 /set_kick_threshold 2000
-/set_promotion_threshold 3000
+/set_promotion_threshold 2500
 ```
 
-Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars and 14 days first-seen tenure. Members first seen after the current war started are shown under review/excuse rather than suggested kick, even if they currently have 0 fame.
+Leaderboard eligibility requires at least 2 completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 completed wars and 14 days first-seen tenure. Suggested kicks include members below the current-war threshold or rolling-average threshold; first-seen is shown as context for leaders, not as an automatic excuse.
 
 Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running.
 
