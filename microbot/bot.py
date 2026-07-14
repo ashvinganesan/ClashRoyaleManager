@@ -108,6 +108,16 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[dt.datetime]:
         return None
 
 
+def parse_join_date_argument(value: str) -> Optional[dt.datetime]:
+    """Parse a manual join date in YYYY-MM-DD format."""
+    try:
+        parsed_date = dt.date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+    return dt.datetime.combine(parsed_date, dt.time.min, tzinfo=dt.timezone.utc)
+
+
 def presence_value(presence: Optional[Any], key: str) -> Optional[str]:
     """Read a field from a SQLite row or test dict."""
     if presence is None:
@@ -117,6 +127,50 @@ def presence_value(presence: Optional[Any], key: str) -> Optional[str]:
         return presence[key]
     except (KeyError, IndexError):
         return None
+
+
+def row_to_dict(row: Any) -> dict:
+    """Convert a SQLite row or mapping to a plain dict."""
+    if row is None:
+        return {}
+
+    if hasattr(row, "keys"):
+        return {key: row[key] for key in row.keys()}
+
+    return dict(row)
+
+
+def merge_join_dates(presence_map: dict, join_date_map: dict) -> dict:
+    """Merge manually known join dates into the presence map."""
+    merged = {tag: row_to_dict(presence) for tag, presence in presence_map.items()}
+
+    for player_tag, join_row in join_date_map.items():
+        target = merged.setdefault(player_tag, {})
+        target["manual_joined_at"] = join_row["joined_at"]
+        target["manual_join_source"] = join_row["source"]
+        target["manual_join_updated_at"] = join_row["updated_at"]
+
+    return merged
+
+
+def known_join_date(presence: Optional[Any]) -> Optional[dt.datetime]:
+    """Return a manually known join date when one is configured."""
+    return parse_iso_datetime(presence_value(presence, "manual_joined_at"))
+
+
+def membership_context_date(presence: Optional[Any], first_seen_at: Optional[dt.datetime]) -> tuple[Optional[dt.datetime], str]:
+    """Return the best membership date and label for display."""
+    joined_at = known_join_date(presence)
+
+    if joined_at is not None:
+        return joined_at, "joined"
+
+    return first_seen_at, "seen"
+
+
+def membership_context_text(value: Optional[dt.datetime], label: str, now: dt.datetime) -> str:
+    """Format a membership date for compact war rows."""
+    return f"{label} {short_date(value)} ({days_ago_label(value, now)})"
 
 
 def short_date(value: Optional[dt.datetime]) -> str:
@@ -606,7 +660,7 @@ def refresh_war_presence(store: Store,
                          now: dt.datetime) -> dict:
     """Refresh member presence and return the stored presence map."""
     record_war_presence(store, clan_tag, race, members_payload, race_log, now)
-    return store.get_member_presence_map()
+    return merge_join_dates(store.get_member_presence_map(), store.get_member_join_date_map())
 
 
 def score_line(role_text: str,
@@ -615,7 +669,8 @@ def score_line(role_text: str,
                active_label: str,
                average_fame: Optional[float],
                race_count: int,
-               first_seen_at: Optional[dt.datetime],
+               membership_at: Optional[dt.datetime],
+               membership_label: str,
                now: dt.datetime,
                reason: str) -> str:
     """Format a compact member war score line."""
@@ -624,7 +679,7 @@ def score_line(role_text: str,
     return (
         f"{role_text} {format_name(name)} - {active_text} {active_label}, "
         f"{average_text} avg/{race_count} full wars, "
-        f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}): {reason}"
+        f"{membership_context_text(membership_at, membership_label, now)}: {reason}"
     )
 
 
@@ -753,13 +808,14 @@ def last_war_bottom_lines(race_log: dict,
         presence = presence_map.get(player_tag)
         first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
         first_seen_source = presence_value(presence, "first_seen_source")
+        membership_at, membership_label = membership_context_date(presence, first_seen_at)
         full_entries = eligible_completed_entries(history, first_seen_at, first_seen_source)
         average_fame = average_entry_fame(full_entries)
         rows.append(
             f"{rank}. {role_text} {format_name(player_name)} - "
             f"{int_value(participant.get('fame')):,} last war, "
             f"{average_fame_text(average_fame)} avg/{len(full_entries)} full wars, "
-            f"seen {short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)}), "
+            f"{membership_context_text(membership_at, membership_label, now)}, "
             f"status: {status_text}"
         )
 
@@ -851,6 +907,8 @@ def build_player_war_stats_embed(target: dict,
     presence = presence_map.get(player_tag)
     first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
     first_seen_source = presence_value(presence, "first_seen_source")
+    joined_at = known_join_date(presence)
+    tenure_at = joined_at or first_seen_at
     last_seen_at = parse_iso_datetime(presence_value(presence, "last_seen_at"))
     full_entries = sorted(
         eligible_completed_entries(history, first_seen_at, first_seen_source),
@@ -867,7 +925,7 @@ def build_player_war_stats_embed(target: dict,
     active_title = "Training Period / Last War" if active_completed_at is not None else "Current War"
     fame_label = "Last war fame" if active_completed_at is not None else "Fame"
     decks_label = "training decks used" if is_training_period(race) else "decks used"
-    has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
+    has_leaderboard_tenure = has_min_tenure(tenure_at, now, MIN_LEADERBOARD_DAYS)
     tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
     low_active = active_fame is not None and active_fame < kick_threshold
     low_or_missing_average = average_fame is None or average_fame < kick_threshold
@@ -922,15 +980,24 @@ def build_player_war_stats_embed(target: dict,
         inline=False,
     )
 
+    joined_line = f"{short_date(joined_at)} ({days_ago_label(joined_at, now)})" if joined_at else None
     first_seen_line = f"{short_date(first_seen_at)} ({days_ago_label(first_seen_at, now)})"
     last_seen_line = f"{short_date(last_seen_at)} ({days_ago_label(last_seen_at, now)})"
+    context_lines = []
+
+    if joined_line:
+        context_lines.append(f"Joined: **{joined_line}**")
+
+    context_lines.extend(
+        [
+            f"First seen by bot/API: **{first_seen_line}**",
+            f"Last seen: **{last_seen_line}**",
+            f"In current roster: **{'Yes' if player_tag in roster_by_tag else 'No - not in clan anymore'}**",
+        ]
+    )
     embed.add_field(
         name="Clan Context",
-        value=(
-            f"First seen: **{first_seen_line}**\n"
-            f"Last seen: **{last_seen_line}**\n"
-            f"In current roster: **{'Yes' if player_tag in roster_by_tag else 'No - not in clan anymore'}**"
-        ),
+        value="\n".join(context_lines),
         inline=False,
     )
 
@@ -961,7 +1028,7 @@ def build_player_war_stats_embed(target: dict,
     elif race_count < MIN_PROMOTION_WARS:
         promotion_detail = f"requires {MIN_PROMOTION_WARS}+ full completed wars"
     elif not has_leaderboard_tenure:
-        promotion_detail = f"requires {MIN_LEADERBOARD_DAYS}+ days first-seen"
+        promotion_detail = f"requires {MIN_LEADERBOARD_DAYS}+ days joined/seen"
     elif active_fame is None:
         promotion_detail = "no full-war score is available yet"
     elif active_fame < kick_threshold:
@@ -971,7 +1038,7 @@ def build_player_war_stats_embed(target: dict,
 
     leaderboard_ok = average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure
     leaderboard_detail = (
-        f"requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen"
+        f"requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days joined/seen"
         if not leaderboard_ok
         else "eligible for the rolling leaderboard"
     )
@@ -1067,15 +1134,16 @@ def build_enhanced_war_stats_embed(race: dict,
         presence = presence_map.get(player_tag)
         first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
         first_seen_source = presence_value(presence, "first_seen_source")
+        membership_at, membership_label = membership_context_date(presence, first_seen_at)
         full_entries = eligible_completed_entries(history, first_seen_at, first_seen_source)
         race_count = len(full_entries)
         average_fame = average_entry_fame(full_entries)
         active_fame, score_label = active_score(current_fame, history, active_completed_at, first_seen_at, first_seen_source)
-        has_leaderboard_tenure = has_min_tenure(first_seen_at, now, MIN_LEADERBOARD_DAYS)
+        has_leaderboard_tenure = has_min_tenure(membership_at, now, MIN_LEADERBOARD_DAYS)
         tracked_after_race_start = first_seen_at is None or first_seen_at > race_start + dt.timedelta(hours=6)
 
         if average_fame is not None and race_count >= MIN_LEADERBOARD_WARS and has_leaderboard_tenure:
-            rolling_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
+            rolling_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, membership_at, membership_label))
 
         if (average_fame is not None
                 and average_fame >= promotion_threshold
@@ -1084,7 +1152,7 @@ def build_enhanced_war_stats_embed(race: dict,
                 and active_fame is not None
                 and active_fame >= kick_threshold
                 and can_be_promoted(member)):
-            promotion_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, first_seen_at))
+            promotion_rows.append((average_fame, race_count, member_role, player_name, active_fame, score_label, membership_at, membership_label))
 
         if should_suggest_kick_demotion(active_fame, average_fame, full_entries, kick_threshold):
             if average_fame is not None:
@@ -1100,7 +1168,18 @@ def build_enhanced_war_stats_embed(race: dict,
                     average_fame if average_fame is not None else -1,
                     race_count,
                     player_name.lower(),
-                    score_line(member_role, player_name, active_fame, score_label, average_fame, race_count, first_seen_at, now, reason),
+                    score_line(
+                        member_role,
+                        player_name,
+                        active_fame,
+                        score_label,
+                        average_fame,
+                        race_count,
+                        membership_at,
+                        membership_label,
+                        now,
+                        reason,
+                    ),
                 )
             )
 
@@ -1108,15 +1187,24 @@ def build_enhanced_war_stats_embed(race: dict,
     rolling_lines = [
         (
             f"{index}. {role_text} {format_name(name)} - {average:,.0f} avg/{race_count} full wars, "
-            f"{fame_text(active_fame)} {score_label}, seen {short_date(first_seen)}"
+            f"{fame_text(active_fame)} {score_label}, {membership_label} {short_date(membership_at)}"
         )
-        for index, (average, race_count, role_text, name, active_fame, score_label, first_seen) in enumerate(rolling_rows[:10], 1)
+        for index, (
+            average,
+            race_count,
+            role_text,
+            name,
+            active_fame,
+            score_label,
+            membership_at,
+            membership_label,
+        ) in enumerate(rolling_rows[:10], 1)
     ]
     embed.add_field(
         name=f"Rolling {ROLLING_WAR_DAYS}-Day Leaders",
         value=clip_text(
             "\n".join(rolling_lines)
-            or f"No eligible members yet. Requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days first-seen."
+            or f"No eligible members yet. Requires {MIN_LEADERBOARD_WARS}+ full completed wars and {MIN_LEADERBOARD_DAYS}+ days joined/seen."
         ),
         inline=False,
     )
@@ -1125,15 +1213,15 @@ def build_enhanced_war_stats_embed(race: dict,
     promotion_lines = [
         (
             f"{role_text} {format_name(name)} - {average:,.0f} avg/{race_count} full wars, "
-            f"{fame_text(active_fame)} {score_label}, seen {short_date(first_seen)}"
+            f"{fame_text(active_fame)} {score_label}, {membership_label} {short_date(membership_at)}"
         )
-        for average, race_count, role_text, name, active_fame, score_label, first_seen in promotion_rows
+        for average, race_count, role_text, name, active_fame, score_label, membership_at, membership_label in promotion_rows
     ]
     add_line_fields(
         embed,
         "Suggested Promotions",
         promotion_lines,
-        f"No promotion suggestions. Requires {promotion_threshold:,}+ average, {MIN_PROMOTION_WARS}+ full wars, and {MIN_LEADERBOARD_DAYS}+ days first-seen.",
+        f"No promotion suggestions. Requires {promotion_threshold:,}+ average, {MIN_PROMOTION_WARS}+ full wars, and {MIN_LEADERBOARD_DAYS}+ days joined/seen.",
     )
 
     suggested_rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
@@ -1150,7 +1238,7 @@ def build_enhanced_war_stats_embed(race: dict,
     embed.set_footer(
         text=(
             f"{completed_count} completed wars in window. "
-            "First seen is context only; Clash API does not expose true join date or automatic excuses."
+            "Joined dates are manual when configured; otherwise seen means bot/API first observed."
         )
     )
     return embed
@@ -1204,7 +1292,7 @@ def build_last_war_bottom_embed(race: dict,
     embed.set_footer(
         text=(
             "Status is based on the current clan roster. "
-            "First seen is bot/API observation, not a Clash-provided join date."
+            "Joined dates are manual when configured; otherwise seen means bot/API first observed."
         )
     )
     return embed
@@ -1377,6 +1465,23 @@ def build_bot() -> MicroBot:
                 return normalized_role(member)
 
         return "member"
+
+    async def resolve_current_clan_member(query: str) -> tuple[Optional[dict], Optional[str]]:
+        """Resolve a current clan member by player tag or IGN."""
+        if not settings.clan_tag:
+            return None, "No clan tag is configured for this bot."
+
+        try:
+            members = await asyncio.to_thread(clash.get_clan_members, settings.clan_tag)
+        except ClashApiError:
+            return None, "The Clash Royale API is unavailable. Try again later."
+
+        players_by_tag = {
+            member["tag"]: member
+            for member in members.get("items") or []
+            if member.get("tag")
+        }
+        return resolve_war_player(query, players_by_tag)
 
     async def add_verified_role(interaction: discord.Interaction, member: discord.Member) -> Optional[str]:
         """Assign the configured verified role and return a user-facing note."""
@@ -1818,6 +1923,68 @@ def build_bot() -> MicroBot:
             ephemeral=True,
         )
 
+    @bot.tree.command(name="set_join_date", description="Set a known clan join date for a member.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(player="Current clan member IGN or player tag")
+    @app_commands.describe(joined_on="Known join date in YYYY-MM-DD format")
+    async def set_join_date(interaction: discord.Interaction, player: str, joined_on: str):
+        joined_at = parse_join_date_argument(joined_on)
+
+        if joined_at is None:
+            await interaction.response.send_message("Use a date like `2025-01-14`.", ephemeral=True)
+            return
+
+        if joined_at.date() > dt.datetime.now(dt.timezone.utc).date():
+            await interaction.response.send_message("Join date cannot be in the future.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        member, error = await resolve_current_clan_member(player)
+
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+
+        store.set_member_join_date(
+            member["tag"],
+            member.get("name", "Unknown"),
+            joined_at,
+            interaction.user.id,
+        )
+        await interaction.followup.send(
+            (
+                f"Known join date set for {member.get('name', 'Unknown')} `{member['tag']}`: "
+                f"`{joined_at.date().isoformat()}`.\n"
+                "`/war_stats`, `/last_war_bottom`, `/show_stats`, and `/show` will display this as joined date."
+            ),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(name="clear_join_date", description="Clear a manually known clan join date.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(player="Current clan member IGN or player tag")
+    async def clear_join_date(interaction: discord.Interaction, player: str):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        member, error = await resolve_current_clan_member(player)
+
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+
+        removed = store.clear_member_join_date(member["tag"])
+
+        if removed is None:
+            await interaction.followup.send(
+                f"No known join date was set for {member.get('name', 'Unknown')} `{member['tag']}`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Known join date cleared for {member.get('name', 'Unknown')} `{member['tag']}`.",
+            ephemeral=True,
+        )
+
     @bot.tree.command(name="war_config", description="Show Clan War stat settings.")
     @app_commands.checks.has_permissions(administrator=True)
     async def war_config(interaction: discord.Interaction):
@@ -1826,9 +1993,10 @@ def build_bot() -> MicroBot:
                 f"Kick suggestion threshold: `{current_kick_threshold():,}` war fame\n"
                 f"Promotion suggestion threshold: `{current_promotion_threshold():,}` average war fame\n"
                 f"Rolling window: `{ROLLING_WAR_DAYS}` days\n"
-                f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
-                f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days first-seen\n"
-                "Join date note: Clash Royale does not expose true join date; this bot shows first seen."
+                f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
+                f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
+                "Join date note: Clash Royale does not expose true join date. "
+                "Use `/set_join_date` for manually known dates; otherwise the bot shows first seen."
             ),
             ephemeral=True,
         )
@@ -2265,6 +2433,8 @@ def build_bot() -> MicroBot:
     @set_auto_verification.error
     @set_kick_threshold.error
     @set_promotion_threshold.error
+    @set_join_date.error
+    @clear_join_date.error
     @war_config.error
     @verification_config.error
     @remove_verification.error

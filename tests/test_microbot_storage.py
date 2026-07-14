@@ -190,6 +190,26 @@ class MicrobotStorageTests(unittest.TestCase):
             self.assertEqual(presence["first_seen_source"], "river race log")
             self.assertEqual(presence["last_seen_at"], newer.isoformat())
 
+    def test_member_join_date_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+            joined_at = dt.datetime(2025, 1, 14, tzinfo=dt.timezone.utc)
+
+            store.set_member_join_date("#ABC123", "Player", joined_at, 123)
+            join_dates = store.get_member_join_date_map()
+
+            self.assertEqual(join_dates["#ABC123"]["player_name"], "Player")
+            self.assertEqual(join_dates["#ABC123"]["joined_at"], joined_at.isoformat())
+            self.assertEqual(join_dates["#ABC123"]["source"], "manual")
+            self.assertEqual(join_dates["#ABC123"]["set_by_discord_id"], 123)
+
+            removed = store.clear_member_join_date("#ABC123")
+
+            self.assertIsNotNone(removed)
+            self.assertEqual(removed["joined_at"], joined_at.isoformat())
+            self.assertEqual(store.get_member_join_date_map(), {})
+
 
 if __name__ == "__main__":
     unittest.main()

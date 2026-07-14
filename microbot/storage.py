@@ -81,6 +81,15 @@ class Store:
                     last_seen_at TEXT NOT NULL,
                     first_seen_source TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS member_join_dates (
+                    player_tag TEXT PRIMARY KEY,
+                    player_name TEXT NOT NULL,
+                    joined_at TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    set_by_discord_id INTEGER,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -210,6 +219,50 @@ class Store:
             return int(value)
         except ValueError:
             return None
+
+    def set_member_join_date(self,
+                             player_tag: str,
+                             player_name: str,
+                             joined_at: dt.datetime,
+                             set_by_discord_id: Optional[int]):
+        """Persist a manually known clan join date."""
+        now = iso(utc_now())
+        joined_value = iso(joined_at)
+
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO member_join_dates (
+                    player_tag, player_name, joined_at, source, set_by_discord_id, updated_at
+                )
+                VALUES (?, ?, ?, 'manual', ?, ?)
+                ON CONFLICT(player_tag) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    joined_at = excluded.joined_at,
+                    source = excluded.source,
+                    set_by_discord_id = excluded.set_by_discord_id,
+                    updated_at = excluded.updated_at
+                """,
+                (player_tag, player_name, joined_value, set_by_discord_id, now),
+            )
+
+    def clear_member_join_date(self, player_tag: str) -> Optional[sqlite3.Row]:
+        """Remove a manually known clan join date."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM member_join_dates WHERE player_tag = ?",
+                (player_tag,),
+            ).fetchone()
+            connection.execute("DELETE FROM member_join_dates WHERE player_tag = ?", (player_tag,))
+
+        return row
+
+    def get_member_join_date_map(self) -> dict[str, sqlite3.Row]:
+        """Return manually known clan join dates keyed by player tag."""
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM member_join_dates").fetchall()
+
+        return {row["player_tag"]: row for row in rows}
 
     def upsert_member_presence(self,
                                player_tag: str,

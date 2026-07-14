@@ -72,7 +72,17 @@ class MicrobotWarStatsTests(unittest.TestCase):
             {"periodIndex": 6, "clan": {"name": "A Clan Reborn", "tag": "#CLAN", "participants": current_participants}},
             members_payload,
             {"items": race_log_items},
-            {participant["tag"]: {"first_seen_at": first_seen} for participant in current_participants},
+            {
+                participant["tag"]: {
+                    "first_seen_at": first_seen,
+                    "manual_joined_at": (
+                        dt.datetime(2025, 1, 14, tzinfo=dt.timezone.utc).isoformat()
+                        if participant["tag"] == "#KING"
+                        else None
+                    ),
+                }
+                for participant in current_participants
+            },
             2000,
             2500,
         )
@@ -86,6 +96,7 @@ class MicrobotWarStatsTests(unittest.TestCase):
         self.assertNotIn("KING AJ", kick_text)
         self.assertNotIn("Metro Franky", kick_text)
         self.assertIn("🟩 Elder KING AJ", leaders_text)
+        self.assertIn("joined Jan 14", leaders_text)
         self.assertIn("🟥 Co-leader Metro Franky", leaders_text)
 
     def test_training_period_uses_last_full_war_and_skips_partial_scores(self):

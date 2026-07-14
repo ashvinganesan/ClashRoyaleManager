@@ -24,8 +24,10 @@ It is intentionally separate from the full historical manager while deployment i
 - `/verification_config` shows the current verification roles, review channel, and auto-verification settings.
 - `/set_kick_threshold <min_fame>` sets the war fame threshold used for kick suggestions.
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
+- `/set_join_date <player> <joined_on>` sets a manually known clan join date for a current clan member. Use `YYYY-MM-DD`.
+- `/clear_join_date <player>` removes a manually known clan join date.
 - `/war_config` shows the current war stat settings.
-- `/war_stats` posts public current Clan War stats, rolling completed-war averages, first-seen dates, suggested promotions, and suggested kick/demotion candidates.
+- `/war_stats` posts public current Clan War stats, rolling completed-war averages, joined/seen dates, suggested promotions, and suggested kick/demotion candidates.
 - `/last_war_bottom` posts a public rank 41+ audit from the latest completed war.
 - `/show_stats [player] [member]` and `/show [player] [member]` post public war stats for one player by IGN, player tag, verified Discord member, or your own verified account. They state whether the player is still in the current clan roster.
 - `/me` shows the member's linked account.
@@ -42,7 +44,7 @@ It is intentionally separate from the full historical manager while deployment i
 7. Leave one member verification channel visible to `@everyone`.
 8. Hide the rest of the server from `@everyone`, then allow `Verified` to view channels, send messages, and use application commands in the normal categories/channels.
 
-Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_elder_role`, `/set_coleader_role`, `/set_verification_channel`, `/set_auto_verification`, `/set_kick_threshold`, `/set_promotion_threshold`, `/war_config`, and `/verification_config`.
+Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_elder_role`, `/set_coleader_role`, `/set_verification_channel`, `/set_auto_verification`, `/set_kick_threshold`, `/set_promotion_threshold`, `/set_join_date`, `/clear_join_date`, `/war_config`, and `/verification_config`.
 
 `/war_stats`, `/last_war_bottom`, `/show_stats`, and `/show` are public bot commands. If a verified member cannot see them in Discord's slash-command picker, check that their channel/category permissions include **Use Application Commands** for the `Verified` role and that the bot is allowed in that channel.
 
@@ -52,11 +54,11 @@ Auto verification is disabled by default. If an admin runs `/set_auto_verificati
 
 ## War Stats
 
-`/war_stats` combines the current river race with recent completed races from the Clash Royale API. It also records when the bot first sees each member in the current roster or river race history. During training days, the active score switches to the last completed war so the post-war reset does not make everyone look like they scored 0.
+`/war_stats` combines the current river race with recent completed races from the Clash Royale API. It records when the bot first sees each member in the current roster or river race history, and it uses manually known join dates when leaders configure them. During training days, the active score switches to the last completed war so the post-war reset does not make everyone look like they scored 0.
 
-`/last_war_bottom` lists everyone who ranked below 40th in the latest completed war. It includes last-war fame, rolling full-war average, first-seen age, and whether the player is still in the clan or is already gone.
+`/last_war_bottom` lists everyone who ranked below 40th in the latest completed war. It includes last-war fame, rolling full-war average, joined/seen age, and whether the player is still in the clan or is already gone.
 
-`/show player:DaddyRizz` or `/show_stats player:DaddyRizz` shows the same current-war, rolling-average, first-seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `member:@someone` for a verified Discord member, or run `/show` for your own verified account.
+`/show player:DaddyRizz` or `/show_stats player:DaddyRizz` shows the same current-war, rolling-average, joined/seen, promotion, and kick/demotion logic for one member. You can also use a player tag, `member:@someone` for a verified Discord member, or run `/show` for your own verified account.
 
 The default kick suggestion threshold is `2000` war fame. The default promotion suggestion threshold is `2500` average war fame.
 
@@ -67,11 +69,11 @@ Leaders can change them with:
 /set_promotion_threshold 2500
 ```
 
-Leaderboard eligibility requires at least 2 full completed wars and 14 days first-seen tenure. Promotion suggestions require at least 3 full completed wars, 14 days first-seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
+Leaderboard eligibility requires at least 2 full completed wars and 14 days joined/seen tenure. Promotion suggestions require at least 3 full completed wars, 14 days joined/seen tenure, and an in-game role below co-leader. War rows include colored role markers for member, elder, co-leader, and leader.
 
 Suggested kick/demotion candidates must be below the active score threshold and also have either no full completed-war average yet or a rolling average below the kick threshold. The active score is current-war fame during battle periods and last-war fame during training periods. Members above the active score threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. Short samples are handled conservatively: if a member has fewer than 3 full wars and at least one full war at or above the kick threshold, the bot does not auto-suggest kick/demotion yet.
 
-Clash Royale does not expose true clan join dates. The bot shows "first seen" dates based on bot/API observations, so that data becomes more accurate as the bot keeps running. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted. If the bot first discovers a member from a completed river-race log, that first observed race can count when the score is high enough to show real participation.
+Clash Royale does not expose true clan join dates. The bot shows manually known join dates when leaders add them with `/set_join_date player:alphawolf143 joined_on:2025-01-14`; otherwise it shows "seen" dates based on bot/API observations. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted. If the bot first discovers a member from a completed river-race log, that first observed race can count when the score is high enough to show real participation.
 
 ## Run
 
