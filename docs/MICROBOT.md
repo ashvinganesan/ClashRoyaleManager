@@ -26,6 +26,7 @@ It is intentionally separate from the full historical manager while deployment i
 - `/set_promotion_threshold <min_average_fame>` sets the average war fame threshold used for promotion suggestions.
 - `/set_join_date <player> <joined_on>` sets a manually known clan join date for a current clan member. Use `YYYY-MM-DD`.
 - `/clear_join_date <player>` removes a manually known clan join date.
+- `/sync_join_dates` immediately seeds missing join dates from the current roster.
 - `/war_config` shows the current war stat settings.
 - `/war_stats` posts public current Clan War stats, rolling completed-war averages, joined/seen dates, suggested promotions, and suggested kick/demotion candidates.
 - `/last_war_bottom` posts a public rank 41+ audit from the latest completed war.
@@ -44,7 +45,7 @@ It is intentionally separate from the full historical manager while deployment i
 7. Leave one member verification channel visible to `@everyone`.
 8. Hide the rest of the server from `@everyone`, then allow `Verified` to view channels, send messages, and use application commands in the normal categories/channels.
 
-Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_elder_role`, `/set_coleader_role`, `/set_verification_channel`, `/set_auto_verification`, `/set_kick_threshold`, `/set_promotion_threshold`, `/set_join_date`, `/clear_join_date`, `/war_config`, and `/verification_config`.
+Users with Discord administrator permission or the `Elder` role can run `/confirm_verification`. Only users with Discord administrator permission can run `/remove_verification`, `/set_verified_role`, `/set_elder_role`, `/set_coleader_role`, `/set_verification_channel`, `/set_auto_verification`, `/set_kick_threshold`, `/set_promotion_threshold`, `/set_join_date`, `/clear_join_date`, `/sync_join_dates`, `/war_config`, and `/verification_config`.
 
 `/war_stats`, `/last_war_bottom`, `/show_stats`, and `/show` are public bot commands. If a verified member cannot see them in Discord's slash-command picker, check that their channel/category permissions include **Use Application Commands** for the `Verified` role and that the bot is allowed in that channel.
 
@@ -73,7 +74,7 @@ Leaderboard eligibility requires at least 2 full completed wars and 14 days join
 
 Suggested kick/demotion candidates must be below the active score threshold and also have either no full completed-war average yet or a rolling average below the kick threshold. The active score is current-war fame during battle periods and last-war fame during training periods. Members above the active score threshold or at/above the rolling-average threshold stay off the suggested kick/demotion list. Short samples are handled conservatively: if a member has fewer than 3 full wars and at least one full war at or above the kick threshold, the bot does not auto-suggest kick/demotion yet.
 
-Clash Royale does not expose true clan join dates. The bot shows manually known join dates when leaders add them with `/set_join_date player:alphawolf143 joined_on:2025-01-14`; otherwise it shows "seen" dates based on bot/API observations. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted. If the bot first discovers a member from a completed river-race log, that first observed race can count when the score is high enough to show real participation.
+Clash Royale does not expose true clan join dates. The bot shows manually known join dates when leaders add them with `/set_join_date player:alphawolf143 joined_on:2025-01-14`. It also seeds missing current-roster join dates automatically: the first sync assigns existing members to `2026-05-04`, then the bot runs a weekly roster sync and assigns the sync date to brand-new members it has not seen before. Use `/sync_join_dates` to force that sync immediately. Rolling averages only count wars where the member was first seen by the approximate start of battle day 1, based on the completed-war timestamp from the Clash Royale API; partial wars are shown but marked as not counted. If the bot first discovers a member from a completed river-race log, that first observed race can count when the score is high enough to show real participation.
 
 ## Run
 

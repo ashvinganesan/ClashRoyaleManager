@@ -224,8 +224,9 @@ class Store:
                              player_tag: str,
                              player_name: str,
                              joined_at: dt.datetime,
-                             set_by_discord_id: Optional[int]):
-        """Persist a manually known clan join date."""
+                             set_by_discord_id: Optional[int],
+                             source: str = "manual"):
+        """Persist a known clan join date."""
         now = iso(utc_now())
         joined_value = iso(joined_at)
 
@@ -235,7 +236,7 @@ class Store:
                 INSERT INTO member_join_dates (
                     player_tag, player_name, joined_at, source, set_by_discord_id, updated_at
                 )
-                VALUES (?, ?, ?, 'manual', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(player_tag) DO UPDATE SET
                     player_name = excluded.player_name,
                     joined_at = excluded.joined_at,
@@ -243,8 +244,37 @@ class Store:
                     set_by_discord_id = excluded.set_by_discord_id,
                     updated_at = excluded.updated_at
                 """,
-                (player_tag, player_name, joined_value, set_by_discord_id, now),
+                (player_tag, player_name, joined_value, source, set_by_discord_id, now),
             )
+
+    def seed_missing_member_join_dates(self,
+                                       members: list[dict],
+                                       joined_at: dt.datetime,
+                                       source: str) -> int:
+        """Set a known clan join date for current members without one."""
+        now = iso(utc_now())
+        joined_value = iso(joined_at)
+        inserted = 0
+
+        with self.connect() as connection:
+            for member in members:
+                player_tag = member.get("tag")
+
+                if not player_tag:
+                    continue
+
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO member_join_dates (
+                        player_tag, player_name, joined_at, source, set_by_discord_id, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, NULL, ?)
+                    """,
+                    (player_tag, member.get("name", "Unknown"), joined_value, source, now),
+                )
+                inserted += cursor.rowcount
+
+        return inserted
 
     def clear_member_join_date(self, player_tag: str) -> Optional[sqlite3.Row]:
         """Remove a manually known clan join date."""

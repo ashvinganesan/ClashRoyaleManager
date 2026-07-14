@@ -210,6 +210,30 @@ class MicrobotStorageTests(unittest.TestCase):
             self.assertEqual(removed["joined_at"], joined_at.isoformat())
             self.assertEqual(store.get_member_join_date_map(), {})
 
+    def test_seed_missing_member_join_dates_does_not_overwrite_existing_dates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(str(Path(directory) / "microbot.sqlite3"))
+            store.initialize()
+            manual_at = dt.datetime(2025, 1, 14, tzinfo=dt.timezone.utc)
+            seeded_at = dt.datetime(2026, 5, 4, tzinfo=dt.timezone.utc)
+
+            store.set_member_join_date("#EXISTING", "Existing", manual_at, 123)
+            inserted = store.seed_missing_member_join_dates(
+                [
+                    {"tag": "#EXISTING", "name": "Existing"},
+                    {"tag": "#NEW", "name": "New"},
+                ],
+                seeded_at,
+                "auto-baseline",
+            )
+            join_dates = store.get_member_join_date_map()
+
+            self.assertEqual(inserted, 1)
+            self.assertEqual(join_dates["#EXISTING"]["joined_at"], manual_at.isoformat())
+            self.assertEqual(join_dates["#EXISTING"]["source"], "manual")
+            self.assertEqual(join_dates["#NEW"]["joined_at"], seeded_at.isoformat())
+            self.assertEqual(join_dates["#NEW"]["source"], "auto-baseline")
+
 
 if __name__ == "__main__":
     unittest.main()

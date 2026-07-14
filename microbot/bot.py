@@ -32,6 +32,11 @@ ROLLING_WAR_DAYS = 35
 LAST_WAR_BOTTOM_START_RANK = 41
 DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
+JOIN_DATE_BASELINE_DATE = dt.date(2026, 5, 4)
+JOIN_DATE_BASELINE_SETTING = "join_date_baseline_completed"
+JOIN_DATE_BASELINE_SOURCE = "auto-baseline"
+JOIN_DATE_TRACKED_SOURCE = "auto-roster"
+JOIN_DATE_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 FULL_WAR_JOIN_CUTOFF_BEFORE_END = dt.timedelta(days=4)
 FIRST_OBSERVED_FULL_WAR_FAME_FLOOR = 2000
 MIN_KICK_DEMOTION_SAMPLE_WARS = 3
@@ -661,6 +666,33 @@ def refresh_war_presence(store: Store,
     """Refresh member presence and return the stored presence map."""
     record_war_presence(store, clan_tag, race, members_payload, race_log, now)
     return merge_join_dates(store.get_member_presence_map(), store.get_member_join_date_map())
+
+
+def sync_roster_join_dates(store: Store,
+                           clash: ClashClient,
+                           clan_tag: Optional[str],
+                           now: dt.datetime) -> tuple[int, dt.datetime, str]:
+    """Seed missing known join dates from the current clan roster."""
+    if not clan_tag:
+        return 0, now, JOIN_DATE_TRACKED_SOURCE
+
+    members_payload = clash.get_clan_members(clan_tag)
+    members = members_payload.get("items") or []
+    baseline_completed = store.get_setting(JOIN_DATE_BASELINE_SETTING) == "1"
+
+    if baseline_completed:
+        joined_at = now
+        source = JOIN_DATE_TRACKED_SOURCE
+    else:
+        joined_at = dt.datetime.combine(JOIN_DATE_BASELINE_DATE, dt.time.min, tzinfo=dt.timezone.utc)
+        source = JOIN_DATE_BASELINE_SOURCE
+
+    inserted = store.seed_missing_member_join_dates(members, joined_at, source)
+
+    if not baseline_completed:
+        store.set_setting(JOIN_DATE_BASELINE_SETTING, "1")
+
+    return inserted, joined_at, source
 
 
 def score_line(role_text: str,
@@ -1309,6 +1341,7 @@ class MicroBot(discord.Client):
         self.clash = clash
         self.tree = app_commands.CommandTree(self)
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._join_date_task: Optional[asyncio.Task] = None
 
     async def setup_hook(self):
         """Register slash commands."""
@@ -1326,6 +1359,9 @@ class MicroBot(discord.Client):
 
         if self._heartbeat_task is None or self._heartbeat_task.done():
             self._heartbeat_task = asyncio.create_task(self.write_heartbeat_loop())
+
+        if self._join_date_task is None or self._join_date_task.done():
+            self._join_date_task = asyncio.create_task(self.sync_join_dates_loop())
 
     async def write_heartbeat_loop(self):
         """Write a liveness marker for systemd diagnostics/watchdog scripts."""
@@ -1347,6 +1383,32 @@ class MicroBot(discord.Client):
                 LOG.exception("Failed to write heartbeat file")
 
             await asyncio.sleep(60)
+
+    async def sync_join_dates_loop(self):
+        """Track current-roster join dates on startup and then weekly."""
+        await self.wait_until_ready()
+
+        while not self.is_closed():
+            try:
+                inserted, joined_at, source = await asyncio.to_thread(
+                    sync_roster_join_dates,
+                    self.store,
+                    self.clash,
+                    self.settings.clan_tag,
+                    dt.datetime.now(dt.timezone.utc),
+                )
+                LOG.info(
+                    "Join-date sync complete: inserted=%s joined_at=%s source=%s",
+                    inserted,
+                    joined_at.date().isoformat(),
+                    source,
+                )
+            except ClashApiError:
+                LOG.exception("Join-date sync failed because the Clash Royale API is unavailable")
+            except Exception:
+                LOG.exception("Join-date sync failed unexpectedly")
+
+            await asyncio.sleep(JOIN_DATE_SYNC_INTERVAL_SECONDS)
 
 
 def build_bot() -> MicroBot:
@@ -1985,6 +2047,33 @@ def build_bot() -> MicroBot:
             ephemeral=True,
         )
 
+    @bot.tree.command(name="sync_join_dates", description="Seed missing known join dates from the current roster.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def sync_join_dates(interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        try:
+            inserted, joined_at, source = await asyncio.to_thread(
+                sync_roster_join_dates,
+                store,
+                clash,
+                settings.clan_tag,
+                dt.datetime.now(dt.timezone.utc),
+            )
+        except ClashApiError:
+            await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
+            return
+
+        detail = (
+            "baseline current roster"
+            if source == JOIN_DATE_BASELINE_SOURCE
+            else "newly observed current roster members"
+        )
+        await interaction.followup.send(
+            f"Join-date sync added `{inserted}` missing dates for {detail} using `{joined_at.date().isoformat()}`.",
+            ephemeral=True,
+        )
+
     @bot.tree.command(name="war_config", description="Show Clan War stat settings.")
     @app_commands.checks.has_permissions(administrator=True)
     async def war_config(interaction: discord.Interaction):
@@ -1996,7 +2085,8 @@ def build_bot() -> MicroBot:
                 f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
                 f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
                 "Join date note: Clash Royale does not expose true join date. "
-                "Use `/set_join_date` for manually known dates; otherwise the bot shows first seen."
+                "The bot auto-seeds current members to 2026-05-04 once, then tracks new roster appearances weekly. "
+                "Use `/set_join_date` for better manually known dates."
             ),
             ephemeral=True,
         )
@@ -2435,6 +2525,7 @@ def build_bot() -> MicroBot:
     @set_promotion_threshold.error
     @set_join_date.error
     @clear_join_date.error
+    @sync_join_dates.error
     @war_config.error
     @verification_config.error
     @remove_verification.error
