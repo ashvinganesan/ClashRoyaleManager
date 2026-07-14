@@ -35,6 +35,7 @@ PLAYER_TAG_CHARACTERS = set("0289PYLQGRJCUV")
 JOIN_DATE_BASELINE_DATE = dt.date(2026, 5, 4)
 JOIN_DATE_BASELINE_SETTING = "join_date_baseline_completed"
 JOIN_DATE_BASELINE_SOURCE = "auto-baseline"
+JOIN_DATE_OBSERVED_SOURCE = "auto-observed"
 JOIN_DATE_TRACKED_SOURCE = "auto-roster"
 JOIN_DATE_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 FULL_WAR_JOIN_CUTOFF_BEFORE_END = dt.timedelta(days=4)
@@ -671,28 +672,63 @@ def refresh_war_presence(store: Store,
 def sync_roster_join_dates(store: Store,
                            clash: ClashClient,
                            clan_tag: Optional[str],
-                           now: dt.datetime) -> tuple[int, dt.datetime, str]:
+                           now: dt.datetime) -> tuple[int, dict[str, int]]:
     """Seed missing known join dates from the current clan roster."""
     if not clan_tag:
-        return 0, now, JOIN_DATE_TRACKED_SOURCE
+        return 0, {}
 
     members_payload = clash.get_clan_members(clan_tag)
     members = members_payload.get("items") or []
     baseline_completed = store.get_setting(JOIN_DATE_BASELINE_SETTING) == "1"
+    presence_map = store.get_member_presence_map()
+    existing_join_dates = store.get_member_join_date_map()
+    seed_records = []
 
-    if baseline_completed:
+    for member in members:
+        player_tag = member.get("tag")
+
+        if not player_tag or player_tag in existing_join_dates:
+            continue
+
         joined_at = now
         source = JOIN_DATE_TRACKED_SOURCE
-    else:
-        joined_at = dt.datetime.combine(JOIN_DATE_BASELINE_DATE, dt.time.min, tzinfo=dt.timezone.utc)
-        source = JOIN_DATE_BASELINE_SOURCE
 
-    inserted = store.seed_missing_member_join_dates(members, joined_at, source)
+        if not baseline_completed:
+            presence = presence_map.get(player_tag)
+            first_seen_at = parse_iso_datetime(presence_value(presence, "first_seen_at"))
+
+            if first_seen_at and first_seen_at.date() <= JOIN_DATE_BASELINE_DATE:
+                joined_at = dt.datetime.combine(JOIN_DATE_BASELINE_DATE, dt.time.min, tzinfo=dt.timezone.utc)
+                source = JOIN_DATE_BASELINE_SOURCE
+            elif first_seen_at:
+                joined_at = dt.datetime.combine(
+                    first_seen_at.astimezone(dt.timezone.utc).date(),
+                    dt.time.min,
+                    tzinfo=dt.timezone.utc,
+                )
+                source = JOIN_DATE_OBSERVED_SOURCE
+
+        seed_records.append(
+            {
+                "tag": player_tag,
+                "name": member.get("name", "Unknown"),
+                "joined_at": joined_at,
+                "source": source,
+            }
+        )
+
+    inserted = store.seed_missing_member_join_date_records(seed_records)
 
     if not baseline_completed:
         store.set_setting(JOIN_DATE_BASELINE_SETTING, "1")
 
-    return inserted, joined_at, source
+    source_counts: dict[str, int] = {}
+
+    for record in seed_records:
+        source = record["source"]
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    return inserted, source_counts
 
 
 def score_line(role_text: str,
@@ -1390,7 +1426,7 @@ class MicroBot(discord.Client):
 
         while not self.is_closed():
             try:
-                inserted, joined_at, source = await asyncio.to_thread(
+                inserted, source_counts = await asyncio.to_thread(
                     sync_roster_join_dates,
                     self.store,
                     self.clash,
@@ -1398,10 +1434,9 @@ class MicroBot(discord.Client):
                     dt.datetime.now(dt.timezone.utc),
                 )
                 LOG.info(
-                    "Join-date sync complete: inserted=%s joined_at=%s source=%s",
+                    "Join-date sync complete: inserted=%s source_counts=%s",
                     inserted,
-                    joined_at.date().isoformat(),
-                    source,
+                    source_counts,
                 )
             except ClashApiError:
                 LOG.exception("Join-date sync failed because the Clash Royale API is unavailable")
@@ -2053,7 +2088,7 @@ def build_bot() -> MicroBot:
         await interaction.response.defer(thinking=True, ephemeral=True)
 
         try:
-            inserted, joined_at, source = await asyncio.to_thread(
+            inserted, source_counts = await asyncio.to_thread(
                 sync_roster_join_dates,
                 store,
                 clash,
@@ -2064,13 +2099,9 @@ def build_bot() -> MicroBot:
             await interaction.followup.send("The Clash Royale API is unavailable. Try again later.", ephemeral=True)
             return
 
-        detail = (
-            "baseline current roster"
-            if source == JOIN_DATE_BASELINE_SOURCE
-            else "newly observed current roster members"
-        )
+        detail = ", ".join(f"{source}: {count}" for source, count in sorted(source_counts.items())) or "none"
         await interaction.followup.send(
-            f"Join-date sync added `{inserted}` missing dates for {detail} using `{joined_at.date().isoformat()}`.",
+            f"Join-date sync added `{inserted}` missing dates. Sources: {detail}.",
             ephemeral=True,
         )
 
@@ -2085,7 +2116,7 @@ def build_bot() -> MicroBot:
                 f"Leaderboard eligibility: `{MIN_LEADERBOARD_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
                 f"Promotion eligibility: `{MIN_PROMOTION_WARS}+` full completed wars and `{MIN_LEADERBOARD_DAYS}+` days joined/seen\n"
                 "Join date note: Clash Royale does not expose true join date. "
-                "The bot auto-seeds current members to 2026-05-04 once, then tracks new roster appearances weekly. "
+                "The bot auto-seeds May 4 only for members observed by then, then tracks new roster appearances weekly. "
                 "Use `/set_join_date` for better manually known dates."
             ),
             ephemeral=True,

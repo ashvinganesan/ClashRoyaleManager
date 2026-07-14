@@ -28,8 +28,22 @@ class MicrobotJoinDateTests(unittest.TestCase):
             store.initialize()
             first_now = dt.datetime(2026, 7, 14, 12, tzinfo=dt.timezone.utc)
             second_now = dt.datetime(2026, 7, 21, 12, tzinfo=dt.timezone.utc)
+            store.upsert_member_presence(
+                "#ALPHA",
+                "alphawolf143",
+                "#CLAN",
+                dt.datetime(2026, 5, 4, 9, tzinfo=dt.timezone.utc),
+                "river race log",
+            )
+            store.upsert_member_presence(
+                "#BETA",
+                "Beta",
+                "#CLAN",
+                dt.datetime(2026, 6, 29, 9, tzinfo=dt.timezone.utc),
+                "river race log",
+            )
 
-            inserted, joined_at, source = sync_roster_join_dates(
+            inserted, source_counts = sync_roster_join_dates(
                 store,
                 FakeClashClient(
                     [
@@ -40,13 +54,17 @@ class MicrobotJoinDateTests(unittest.TestCase):
                 "#CLAN",
                 first_now,
             )
+            join_dates = store.get_member_join_date_map()
 
             self.assertEqual(inserted, 2)
-            self.assertEqual(joined_at.date().isoformat(), "2026-05-04")
-            self.assertEqual(source, "auto-baseline")
+            self.assertEqual(source_counts, {"auto-baseline": 1, "auto-observed": 1})
+            self.assertEqual(join_dates["#ALPHA"]["joined_at"], "2026-05-04T00:00:00+00:00")
+            self.assertEqual(join_dates["#ALPHA"]["source"], "auto-baseline")
+            self.assertEqual(join_dates["#BETA"]["joined_at"], "2026-06-29T00:00:00+00:00")
+            self.assertEqual(join_dates["#BETA"]["source"], "auto-observed")
             self.assertEqual(store.get_setting(JOIN_DATE_BASELINE_SETTING), "1")
 
-            inserted, joined_at, source = sync_roster_join_dates(
+            inserted, source_counts = sync_roster_join_dates(
                 store,
                 FakeClashClient(
                     [
@@ -61,8 +79,7 @@ class MicrobotJoinDateTests(unittest.TestCase):
             join_dates = store.get_member_join_date_map()
 
             self.assertEqual(inserted, 1)
-            self.assertEqual(joined_at, second_now)
-            self.assertEqual(source, "auto-roster")
+            self.assertEqual(source_counts, {"auto-roster": 1})
             self.assertEqual(join_dates["#ALPHA"]["joined_at"], "2026-05-04T00:00:00+00:00")
             self.assertEqual(join_dates["#NEW"]["joined_at"], second_now.isoformat())
 

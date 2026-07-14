@@ -276,6 +276,38 @@ class Store:
 
         return inserted
 
+    def seed_missing_member_join_date_records(self, records: list[dict]) -> int:
+        """Set per-member known join dates for members without one."""
+        now = iso(utc_now())
+        inserted = 0
+
+        with self.connect() as connection:
+            for record in records:
+                player_tag = record.get("tag")
+                joined_at = record.get("joined_at")
+
+                if not player_tag or joined_at is None:
+                    continue
+
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO member_join_dates (
+                        player_tag, player_name, joined_at, source, set_by_discord_id, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, NULL, ?)
+                    """,
+                    (
+                        player_tag,
+                        record.get("name", "Unknown"),
+                        iso(joined_at),
+                        record.get("source", "auto-roster"),
+                        now,
+                    ),
+                )
+                inserted += cursor.rowcount
+
+        return inserted
+
     def clear_member_join_date(self, player_tag: str) -> Optional[sqlite3.Row]:
         """Remove a manually known clan join date."""
         with self.connect() as connection:
